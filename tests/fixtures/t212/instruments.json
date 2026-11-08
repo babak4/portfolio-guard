@@ -1,0 +1,23 @@
+[
+  {
+    "ticker": "VWRPl_EQ",
+    "isin": "IE00BK5BQT80",
+    "currencyCode": "GBX",
+    "name": "Vanguard FTSE All-World UCITS ETF",
+    "shortName": "VWRP"
+  },
+  {
+    "ticker": "CSH2l_EQ",
+    "isin": "LU1230136894",
+    "currencyCode": "GBX",
+    "name": "Amundi Smart Overnight Return UCITS ETF",
+    "shortName": "CSH2"
+  },
+  {
+    "ticker": "BRKB_US_EQ",
+    "isin": "US0846707026",
+    "currencyCode": "USD",
+    "name": "Berkshire Hathaway Class B",
+    "shortName": "BRK.B"
+  }
+]

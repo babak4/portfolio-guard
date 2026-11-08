@@ -17,3 +17,4 @@ real service; see `docs/queries/`.
 | `src/compass/market/providers/stooq.py` | `src/guard/market/providers/stooq.py` | landing store replaced by an injectable sink |
 | `src/compass/market/providers/frankfurter.py` | `src/guard/market/providers/frankfurter.py` | landing store replaced by an injectable sink |
 | `src/compass/market/providers/_http.py` | `src/guard/market/providers/_http.py` | logs only source and status, never URL or parameters |
+| `src/compass/ingest/adapters/t212_api.py` | `src/guard/ingest/t212.py` | only the read-only path allowlist, 429 backoff and `nextPagePath` pagination logic, re-implemented as a standalone client; HTTP Basic auth, injected sleep/clock, no landing store, pyarrow or dbt |

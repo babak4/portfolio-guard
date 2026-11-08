@@ -1,0 +1,14 @@
+{
+  "items": [
+    {
+      "instrument": {
+        "ticker": "VWRPl_EQ",
+        "name": "Vanguard FTSE All-World"
+      },
+      "quantity": 100,
+      "currentPrice": 10000.0,
+      "averagePricePaid": 10000.0
+    }
+  ],
+  "nextPagePath": "/api/v0/equity/positions?limit=50&cursor=p2"
+}

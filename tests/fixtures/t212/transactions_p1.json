@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "reference": "tx-1",
+      "type": "DEPOSIT",
+      "amount": 1000
+    }
+  ],
+  "nextPagePath": "/api/v0/equity/history/transactions?limit=50&cursor=p2"
+}

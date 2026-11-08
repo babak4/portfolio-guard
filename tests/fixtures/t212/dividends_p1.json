@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "reference": "div-1",
+      "ticker": "VWRPl_EQ",
+      "amount": 1.5
+    }
+  ],
+  "nextPagePath": "/api/v0/equity/history/dividends?limit=50&cursor=p2"
+}

@@ -1,0 +1,27 @@
+{
+  "items": [
+    {
+      "instrument": {
+        "ticker": "CSH2l_EQ",
+        "name": "Amundi Smart Overnight"
+      },
+      "quantity": 20,
+      "currentPrice": "10000.0",
+      "averagePricePaid": "10000.0"
+    },
+    {
+      "instrument": {
+        "ticker": "BRKB_US_EQ",
+        "name": "Berkshire Hathaway"
+      },
+      "quantity": 10,
+      "currentPrice": 520.5,
+      "averagePricePaid": 520.5,
+      "walletImpact": {
+        "currency": "GBP",
+        "currentValue": 4000.0
+      }
+    }
+  ],
+  "nextPagePath": null
+}

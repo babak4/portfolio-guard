@@ -1,0 +1,11 @@
+{
+  "id": 1,
+  "currency": "GBP",
+  "totalValue": 16500.0,
+  "cash": {
+    "availableToTrade": "500.0",
+    "inPies": 0,
+    "reservedForOrders": 0
+  },
+  "investments": {}
+}

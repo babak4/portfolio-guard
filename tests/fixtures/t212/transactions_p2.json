@@ -1,0 +1,10 @@
+{
+  "items": [
+    {
+      "reference": "tx-2",
+      "type": "WITHDRAW",
+      "amount": 50
+    }
+  ],
+  "nextPagePath": null
+}

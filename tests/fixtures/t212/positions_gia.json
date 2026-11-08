@@ -1,0 +1,11 @@
+[
+  {
+    "instrument": {
+      "ticker": "VWRPl_EQ",
+      "name": "Vanguard FTSE All-World"
+    },
+    "quantity": 40,
+    "currentPrice": 10000.0,
+    "averagePricePaid": 10000.0
+  }
+]
