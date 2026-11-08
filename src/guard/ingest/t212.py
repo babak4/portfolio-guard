@@ -103,8 +103,9 @@ class T212Client:
         if method != "GET":
             raise ReadOnlyViolation(f"only GET is allowed, not {method}")
         url, relative = self._url(path)
-        if urlsplit(relative).path not in _ALLOWED_PATHS:
-            raise ReadOnlyViolation(f"path not in read-only allowlist: {urlsplit(relative).path}")
+        path_only = urlsplit(relative).path
+        if path_only not in _ALLOWED_PATHS:
+            raise ReadOnlyViolation(f"path not in read-only allowlist: {path_only}")
         backoff = 1.0
         for attempt in range(_MAX_RETRIES + 1):
             resp = self._http.get(url)

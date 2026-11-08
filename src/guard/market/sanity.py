@@ -7,7 +7,7 @@ from datetime import date, timedelta
 
 from guard.config.models import DataRules
 from guard.market.base import JumpError, Observation, StaleDataError
-from guard.market.calendar import is_trading_day, last_trading_day_before
+from guard.market.calendar import DEFAULT_MARKETS, is_trading_day, last_trading_day_before
 
 
 def check_staleness(
@@ -16,7 +16,7 @@ def check_staleness(
     last_close: date,
     as_of: date,
     rules: DataRules,
-    markets: Sequence[str] = ("uk", "us"),
+    markets: Sequence[str] = DEFAULT_MARKETS,
 ) -> None:
     """Stop when ``last_close`` trails the latest completed trading day by more than
     ``rules.stale_trading_days`` trading days. Holidays and weekends do not count as lag.

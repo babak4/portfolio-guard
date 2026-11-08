@@ -84,16 +84,17 @@ def us_holidays(year: int) -> frozenset[date]:
 
 
 _BY_MARKET = {"uk": uk_holidays, "us": us_holidays}
+DEFAULT_MARKETS: tuple[str, ...] = ("uk", "us")
 
 
-def is_trading_day(d: date, markets: Sequence[str] = ("uk", "us")) -> bool:
+def is_trading_day(d: date, markets: Sequence[str] = DEFAULT_MARKETS) -> bool:
     """True when ``d`` is a weekday and every listed market is open."""
     if d.weekday() >= 5:
         return False
     return all(d not in _BY_MARKET[m](d.year) for m in markets)
 
 
-def last_trading_day_before(as_of: date, markets: Sequence[str] = ("uk", "us")) -> date:
+def last_trading_day_before(as_of: date, markets: Sequence[str] = DEFAULT_MARKETS) -> date:
     """The most recent trading day strictly before ``as_of`` (the latest completed close)."""
     d = as_of - timedelta(days=1)
     while not is_trading_day(d, markets):

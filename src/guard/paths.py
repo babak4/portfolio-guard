@@ -17,7 +17,7 @@ def data_dir() -> Path:
     if not raw:
         raise DataDirError("GUARD_DATA_DIR is not set")
     p = Path(raw).expanduser().resolve()
-    if p == REPO_ROOT or REPO_ROOT in p.parents:
+    if p.is_relative_to(REPO_ROOT):
         raise DataDirError(f"GUARD_DATA_DIR must be outside the repository: {p}")
     p.mkdir(parents=True, exist_ok=True)
     return p

@@ -18,20 +18,18 @@ class SecretNotFound(KeyError):
 def get_secret(name: str) -> str:
     fake = os.environ.get("GUARD_FAKE_SECRETS")  # JSON object; tests only
     if fake is not None:
-        try:
-            return str(json.loads(fake)[name])
-        except KeyError as e:
-            raise SecretNotFound(name) from e
-    from guard.paths import data_dir
+        text = fake
+    else:
+        from guard.paths import data_dir
 
-    path = Path(os.environ.get("GUARD_SECRETS_FILE", data_dir() / "secrets.enc.yaml"))
-    out = subprocess.run(
-        ["sops", "--decrypt", "--output-type", "json", str(path)],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
+        path = Path(os.environ.get("GUARD_SECRETS_FILE", data_dir() / "secrets.enc.yaml"))
+        text = subprocess.run(
+            ["sops", "--decrypt", "--output-type", "json", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
     try:
-        return str(json.loads(out)[name])
+        return str(json.loads(text)[name])
     except KeyError as e:
         raise SecretNotFound(name) from e

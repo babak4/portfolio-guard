@@ -85,12 +85,10 @@ def _clean(observations: Sequence[Observation]) -> _Points:
 
 
 def _content_hash(observations: Sequence[Observation]) -> str:
-    text = "\n".join(f"{o.day.isoformat()}:{o.value}" for o in sorted(observations, key=_day))
+    text = "\n".join(
+        f"{o.day.isoformat()}:{o.value}" for o in sorted(observations, key=lambda o: o.day)
+    )
     return hashlib.sha256(text.encode()).hexdigest()[:16]
-
-
-def _day(o: Observation) -> date:
-    return o.day
 
 
 def _rate_to_level(points: _Points) -> _Points:

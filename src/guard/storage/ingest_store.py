@@ -7,9 +7,12 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from guard.ingest.model import Holding, Snapshot
+from guard.storage._tx import transaction
+
+RunStatus = Literal["ok", "stopped", "failed"]
 
 
 def write_snapshot(conn: sqlite3.Connection, snap: Snapshot) -> None:
@@ -21,8 +24,7 @@ def write_snapshot(conn: sqlite3.Connection, snap: Snapshot) -> None:
     prior = conn.execute(
         "SELECT MAX(day) FROM snapshot WHERE account_id = ? AND day < ?", (snap.account_id, day)
     ).fetchone()[0]
-    conn.execute("BEGIN")
-    try:
+    with transaction(conn):
         conn.execute(
             "DELETE FROM snapshot WHERE account_id = ? AND day = ?", (snap.account_id, day)
         )
@@ -58,17 +60,14 @@ def write_snapshot(conn: sqlite3.Connection, snap: Snapshot) -> None:
             ],
         )
         if prior is not None:
-            missing = date.fromisoformat(prior) + timedelta(days=1)
-            while missing < snap.day:
-                conn.execute(
-                    "INSERT OR IGNORE INTO snapshot_gap (account_id, day) VALUES (?, ?)",
-                    (snap.account_id, missing.isoformat()),
-                )
-                missing += timedelta(days=1)
-        conn.execute("COMMIT")
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
+            first_missing = date.fromisoformat(prior) + timedelta(days=1)
+            conn.executemany(
+                "INSERT OR IGNORE INTO snapshot_gap (account_id, day) VALUES (?, ?)",
+                [
+                    (snap.account_id, (first_missing + timedelta(days=n)).isoformat())
+                    for n in range((snap.day - first_missing).days)
+                ],
+            )
 
 
 def read_snapshot(conn: sqlite3.Connection, account_id: str, day: date) -> Snapshot | None:
@@ -127,20 +126,21 @@ def store_raw_history(
 ) -> int:
     """Store ``(external_id, item)`` pairs once each; returns how many were new."""
     before = conn.total_changes
-    conn.executemany(
-        "INSERT OR IGNORE INTO raw_history (kind, account_id, external_id, payload, fetched_at)"
-        " VALUES (?, ?, ?, ?, ?)",
-        [
-            (
-                kind,
-                account_id,
-                ext,
-                json.dumps(item, default=str, sort_keys=True),
-                fetched_at.isoformat(),
-            )
-            for ext, item in items
-        ],
-    )
+    with transaction(conn):
+        conn.executemany(
+            "INSERT OR IGNORE INTO raw_history (kind, account_id, external_id, payload, fetched_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [
+                (
+                    kind,
+                    account_id,
+                    ext,
+                    json.dumps(item, default=str, sort_keys=True),
+                    fetched_at.isoformat(),
+                )
+                for ext, item in items
+            ],
+        )
     return conn.total_changes - before
 
 
@@ -162,7 +162,7 @@ def snapshot_run_done(conn: sqlite3.Connection, slot: str) -> bool:
 def record_snapshot_run(
     conn: sqlite3.Connection,
     slot: str,
-    status: str,
+    status: RunStatus,
     stop_reason: str | None,
     started_at: datetime,
     finished_at: datetime,

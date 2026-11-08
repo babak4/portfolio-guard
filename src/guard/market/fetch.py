@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from typing import Any
 
 from guard.market.base import (
     Listing,
@@ -31,6 +32,28 @@ class FetchResult:
     errors: dict[str, str] = field(default_factory=dict)  # provider id -> failure text
 
 
+def _fetch(
+    series_id: str,
+    providers: Sequence[Any],
+    supports: Callable[[Any], bool],
+    load: Callable[[Any], list[Observation]],
+    max_sources: int,
+) -> FetchResult:
+    result = FetchResult(series_id)
+    for p in providers:
+        if len(result.sources) >= max_sources:
+            break
+        if not supports(p):
+            continue
+        try:
+            obs = load(p)
+        except ProviderError as e:
+            _record_failure(result, p.provider_id, str(e))
+            continue
+        _record(result, p.provider_id, obs)
+    return result
+
+
 def fetch_prices(
     listing: Listing,
     providers: Sequence[PriceProvider],
@@ -40,19 +63,13 @@ def fetch_prices(
     max_sources: int = 2,
 ) -> FetchResult:
     """Ask providers in order until ``max_sources`` return data; failures are recorded."""
-    result = FetchResult(listing.listing_id)
-    for p in providers:
-        if len(result.sources) >= max_sources:
-            break
-        if not p.supports(listing):
-            continue
-        try:
-            obs = p.daily_closes(listing, start, end)
-        except ProviderError as e:
-            _record_failure(result, p.provider_id, str(e))
-            continue
-        _record(result, p.provider_id, obs)
-    return result
+    return _fetch(
+        listing.listing_id,
+        providers,
+        lambda p: p.supports(listing),
+        lambda p: p.daily_closes(listing, start, end),
+        max_sources,
+    )
 
 
 def fetch_macro(
@@ -64,19 +81,13 @@ def fetch_macro(
     max_sources: int = 2,
 ) -> FetchResult:
     """Same fall-through for FX and macro series."""
-    result = FetchResult(series_id)
-    for p in providers:
-        if len(result.sources) >= max_sources:
-            break
-        if not p.supports_series(series_id):
-            continue
-        try:
-            obs = p.series(series_id, start, end)
-        except ProviderError as e:
-            _record_failure(result, p.provider_id, str(e))
-            continue
-        _record(result, p.provider_id, obs)
-    return result
+    return _fetch(
+        series_id,
+        providers,
+        lambda p: p.supports_series(series_id),
+        lambda p: p.series(series_id, start, end),
+        max_sources,
+    )
 
 
 def _record(result: FetchResult, provider_id: str, obs: list[Observation]) -> None:
