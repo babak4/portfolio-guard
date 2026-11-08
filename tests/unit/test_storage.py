@@ -50,15 +50,20 @@ def test_run_slot_is_unique_per_kind(data_dir: Path) -> None:
 
 
 def test_migrations_apply_once_and_reopen_is_clean(data_dir: Path) -> None:
+    from guard.storage._migrate import migration_files
+
     open_ops().close()
     conn = open_ops()
     names = [r["name"] for r in conn.execute("SELECT name FROM schema_migrations")]
-    assert names == ["0001_init.sql"]
+    assert names == [f.name for f in migration_files("ops")]
     wh = open_warehouse()
-    assert wh.execute("SELECT name FROM schema_migrations").fetchall() == [("0000_baseline.sql",)]
+    expected = [f.name for f in migration_files("warehouse")]
+    assert [
+        r[0] for r in wh.execute("SELECT name FROM schema_migrations ORDER BY name").fetchall()
+    ] == expected
     wh.close()
     wh = open_warehouse()
-    assert wh.execute("SELECT count(*) FROM schema_migrations").fetchone() == (1,)
+    assert wh.execute("SELECT count(*) FROM schema_migrations").fetchone() == (len(expected),)
 
 
 def test_second_process_cannot_take_the_writer_lock(data_dir: Path) -> None:
