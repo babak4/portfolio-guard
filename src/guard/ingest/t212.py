@@ -36,10 +36,10 @@ PAGE_SIZE = 50
 POSITIONS = f"/equity/positions?limit={PAGE_SIZE}"
 SUMMARY = "/equity/account/summary"
 INSTRUMENTS = "/equity/metadata/instruments"
-HISTORY: dict[str, tuple[str, str]] = {  # kind -> (first page path, id field)
-    "orders": (f"/equity/history/orders?limit={PAGE_SIZE}", "id"),
-    "dividends": (f"/equity/history/dividends?limit={PAGE_SIZE}", "reference"),
-    "transactions": (f"/equity/history/transactions?limit={PAGE_SIZE}", "reference"),
+HISTORY: dict[str, tuple[str, tuple[str, ...]]] = {  # kind -> (first page path, id key path)
+    "orders": (f"/equity/history/orders?limit={PAGE_SIZE}", ("order", "id")),
+    "dividends": (f"/equity/history/dividends?limit={PAGE_SIZE}", ("reference",)),
+    "transactions": (f"/equity/history/transactions?limit={PAGE_SIZE}", ("reference",)),
 }
 
 _ALLOWED_PATHS = frozenset(
@@ -234,6 +234,12 @@ def _holding(
     )
 
 
+def load_instruments(client: T212Client) -> dict[str, Mapping[str, Any]]:
+    """All instruments by ticker. The API allows one request every 50 seconds, so a run with
+    several accounts fetches this once and passes it to every ``fetch_snapshot``."""
+    return {str(i["ticker"]): i for i in client.get_all(INSTRUMENTS)}
+
+
 def fetch_snapshot(
     client: T212Client,
     account: Account,
@@ -242,13 +248,15 @@ def fetch_snapshot(
     tolerance: Decimal,
     taken_at: datetime,
     day: date,
+    instruments: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Snapshot:
     """Read positions, cash and instruments and reconcile them with the account total.
 
     ``tolerance`` is the allowed fraction of the total by which positions plus cash may differ
     from it; beyond that the run stops.
     """
-    instruments = {str(i["ticker"]): i for i in client.get_all(INSTRUMENTS)}
+    if instruments is None:
+        instruments = load_instruments(client)
     holdings = merge_same_isin(
         _holding(p, instruments, account, satellites) for p in client.get_all(POSITIONS)
     )
@@ -274,11 +282,14 @@ RawItems = list[tuple[str, dict[str, Any]]]
 def fetch_history(client: T212Client) -> dict[str, RawItems]:
     """Orders, dividends and transactions as ``(external_id, raw item)`` pairs."""
     out: dict[str, RawItems] = {}
-    for kind, (path, id_field) in HISTORY.items():
+    for kind, (path, id_path) in HISTORY.items():
         pairs: RawItems = []
         for item in client.get_all(path):
-            if item.get(id_field) is None:
-                raise IngestIntegrityError(f"{kind} item without {id_field}")
-            pairs.append((str(item[id_field]), item))
+            ident: Any = item
+            for key in id_path:
+                ident = ident.get(key) if isinstance(ident, dict) else None
+            if ident is None:
+                raise IngestIntegrityError(f"{kind} item without {'.'.join(id_path)}")
+            pairs.append((str(ident), item))
         out[kind] = pairs
     return out

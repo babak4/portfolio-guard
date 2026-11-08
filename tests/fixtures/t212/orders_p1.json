@@ -1,14 +1,30 @@
 {
   "items": [
     {
-      "id": 1001,
-      "ticker": "VWRPl_EQ",
-      "filledQuantity": 1
+      "order": {
+        "id": 1001,
+        "ticker": "VWRPl_EQ",
+        "side": "BUY",
+        "status": "FILLED"
+      },
+      "fill": {
+        "id": 10010,
+        "quantity": 1,
+        "price": 100.0
+      }
     },
     {
-      "id": 1002,
-      "ticker": "VWRPl_EQ",
-      "filledQuantity": 2
+      "order": {
+        "id": 1002,
+        "ticker": "VWRPl_EQ",
+        "side": "BUY",
+        "status": "FILLED"
+      },
+      "fill": {
+        "id": 10020,
+        "quantity": 2,
+        "price": 100.0
+      }
     }
   ],
   "nextPagePath": "/api/v0/equity/history/orders?limit=50&cursor=p2"
