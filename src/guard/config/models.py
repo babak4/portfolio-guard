@@ -70,8 +70,18 @@ class DataRules(_Strict):
     jump_threshold: float = Field(gt=0, lt=1)
     crosscheck_tolerance: float = Field(gt=0, lt=1)
     crosscheck_min_overlap: float = Field(gt=0, le=1)
+    live_return_tolerance: float = Field(gt=0, lt=1)
     stale_trading_days: int = Field(ge=0)
     max_gap_days: int = Field(gt=0)
+
+
+class LiveSeries(_Strict):
+    """The two ETFs behind the live weekly signal. Their levels differ, so the cross-check compares
+    their returns over a few days (within ``data.live_return_tolerance``), not their levels."""
+
+    primary: str
+    secondary: str
+    history_days: int = Field(gt=0)
 
 
 class Account(_Strict):
@@ -107,6 +117,7 @@ class GuardConfig(_Strict):
     allocation: Allocation
     constraints: Constraints
     data: DataRules
+    live_series: LiveSeries
     portfolio: Portfolio
     benchmarks: tuple[Benchmark, ...]
     alerts: Alerts

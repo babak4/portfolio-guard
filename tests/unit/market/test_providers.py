@@ -190,6 +190,7 @@ def test_fetch_macro_skips_unsupported_series() -> None:
 
 
 RULES = DataRules(
+    live_return_tolerance=0.02,
     jump_threshold=0.15,
     crosscheck_tolerance=0.005,
     crosscheck_min_overlap=0.9,

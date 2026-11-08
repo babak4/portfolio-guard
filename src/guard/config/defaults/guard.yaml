@@ -47,8 +47,14 @@ data:
   jump_threshold: 0.15           # one-day move treated as implausible
   crosscheck_tolerance: 0.005    # two sources must agree within this fraction
   crosscheck_min_overlap: 0.9    # share of the primary's dates the second source must cover
+  live_return_tolerance: 0.02    # live check: the two ETFs' 5-day returns may differ by this much
   stale_trading_days: 2
   max_gap_days: 10
+
+live_series:
+  primary: "VWRP:XLON"           # GBP-listed global ETF behind the weekly signal
+  secondary: "VT:XNYS"           # USD global ETF, converted to GBP with the daily ECB rate
+  history_days: 400              # calendar days of closes the signals need
 
 portfolio:
   base_currency: GBP
