@@ -1,0 +1,19 @@
+{
+  "derivation": "Worked by hand before the engine existed. Fifty weekdays from Monday 2024-01-01 (ten ISO weeks, day index d, Wednesday of week w is d = 5(w-1)+2). Safe asset is flat at 100. Equity is 100 until d15, 90 on d16..d21, 99 on d22..d39, 108.9 from d40. Signals: only trend can fire (window 2, so it votes negative when the previous close fell); the other two thresholds are unreachable. Ladder: step 0 = 80% equity, step 1 = 60%, confirmation 1, no cooldown, uncapped moves, no spread, drift band 0.5. Start 100000 at 80/20 = 80000 equity / 20000 safe. d16: equity -10% -> 72000, total 92000. Week 1 Wednesday has too little history for the volatility signal (data gap, hold). d17 (Wednesday week 4): the d16 close fell, trend negative, step 0 -> 1: equity 0.6*92000 = 55200, safe 36800, traded 2*(72000-55200) = 33600. d22 (Wednesday week 5): d20 and d21 closes equal, trend not negative, re-entry to 0.8 after equity rose 90 -> 99 (x1.1): equity 55200*1.1 = 60720, total 97520; 0.8*97520 = 78016 equity, 19504 safe, traded 2*(78016-60720) = 34592. d40: equity x1.1 -> 85817.6, total 105321.6. No other decision moves (weights stay within the band, ladder holds). Total traded 33600+34592 = 68192.",
+  "start": "2024-01-01",
+  "days": 50,
+  "equity_changes": {"16": 90.0, "22": 99.0, "40": 108.9},
+  "initial_value": 100000,
+  "expected": {
+    "final_value": 105321.6,
+    "final_equity": 85817.6,
+    "final_safe": 19504.0,
+    "total_traded": 68192.0,
+    "advised": {"0": 0.8, "16": 0.8, "17": 0.6, "21": 0.6, "22": 0.8, "49": 0.8},
+    "values": {"16": 92000.0, "17": 92000.0, "22": 97520.0, "39": 97520.0, "40": 105321.6},
+    "decisions": 10,
+    "derisk_day": 17,
+    "reentry_day": 22,
+    "final_index": 1.053216
+  }
+}
