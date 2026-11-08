@@ -14,6 +14,7 @@ from apscheduler.triggers.cron import CronTrigger
 
 from guard.config.models import Schedule
 from guard.ingest.snapshot_job import daily_trigger, run_snapshot
+from guard.notify.heartbeat import HeartbeatStatus, heartbeat_job
 from guard.run.daily import run_daily
 from guard.run.deps import Deps, log_notice
 from guard.run.redact import redact_amounts
@@ -25,6 +26,7 @@ log = logging.getLogger("guard.worker")
 WEEKLY_JOB = "weekly-advice"
 DAILY_JOB = "daily-check"
 SNAPSHOT_JOB = "daily-snapshot"
+HEARTBEAT_JOB = "weekly-heartbeat"
 
 # A job that missed its time (the host was off) still runs if it is late by less than this: the
 # same day, so the daily jobs answer the day they were meant for.
@@ -35,6 +37,17 @@ DepsSource = Deps | Callable[[], Deps]
 
 def weekly_trigger(schedule: Schedule) -> CronTrigger:
     hour, minute = schedule.weekly_time.split(":")
+    return CronTrigger(
+        day_of_week=schedule.weekly_weekday[:3],
+        hour=int(hour),
+        minute=int(minute),
+        timezone=ZoneInfo(schedule.timezone),
+    )
+
+
+def heartbeat_trigger(schedule: Schedule) -> CronTrigger:
+    """The weekly run's weekday, later in the day (Wednesday 18:00 by default)."""
+    hour, minute = schedule.heartbeat_time.split(":")
     return CronTrigger(
         day_of_week=schedule.weekly_weekday[:3],
         hour=int(hour),
@@ -63,41 +76,60 @@ def _deps(source: DepsSource) -> Any:
 
 
 def _notices(kind: str, outcome: object) -> list[Notice]:
-    """What the owner must be told about a finished job: a run that did not complete, or the
-    events of a daily check. Reasons are already free of amounts."""
-    if isinstance(outcome, RunResult) and outcome.status in ("stopped", "failed", "locked"):
-        return [Notice(kind, outcome.status, outcome.slot, outcome.reason or outcome.status)]
+    """What the owner must be told about a finished job: the weekly report, a run that did not
+    complete, the events of a daily check, or a missing weekly run. Reasons are already free of
+    amounts."""
+    if isinstance(outcome, RunResult):
+        if outcome.status in ("ok", "paused"):
+            return [Notice(kind, "report", outcome.slot, "", result=outcome)]
+        if outcome.status in ("stopped", "failed", "locked"):
+            return [Notice(kind, outcome.status, outcome.slot, outcome.reason or outcome.status)]
     if isinstance(outcome, DailyResult):
         if outcome.status in ("stopped", "failed", "locked"):
             return [Notice(kind, outcome.status, outcome.slot, outcome.reason or outcome.status)]
-        return [Notice(kind, "event", outcome.slot, e.message) for e in outcome.events]
+        return [
+            Notice(kind, "event", outcome.slot, e.message, result=outcome, event=e)
+            for e in outcome.events
+        ]
+    if isinstance(outcome, HeartbeatStatus) and outcome.state == "missing":
+        return [Notice(kind, "missing", outcome.slot, "weekly advice is missing")]
     return []
 
 
 def guarded(
     name: str, kind: str, source: DepsSource, job: Callable[[Deps, datetime], object]
 ) -> Callable[[], None]:
-    """A scheduler job that never raises. Stopped, failed and locked runs and daily events go to
-    ``deps.notify`` so they are alerts, not just log lines."""
+    """A scheduler job that never raises. Finished weekly runs, stopped, failed and locked runs,
+    daily events and a missing weekly run go to ``deps.notify`` while the job's deps are still
+    open, so they are alerts, not just log lines."""
 
     def fire() -> None:
-        notify = log_notice
         try:
             with _deps(source) as deps:
-                notify = deps.notify
-                outcome = job(deps, datetime.now(UTC))
-            log.info("%s finished: %s", name, getattr(outcome, "status", outcome))
-            pending = _notices(kind, outcome)
-        except Exception as e:  # noqa: BLE001 - the scheduler must keep running
-            log.error("%s failed: %s", name, type(e).__name__)
-            pending = [
-                Notice(kind, "failed", "", f"{name} failed: {redact_amounts(type(e).__name__)}")
-            ]
-        for notice in pending:
-            try:
-                notify(notice)
-            except Exception as e:  # noqa: BLE001 - a broken alert path must not stop the jobs
-                log.error("could not deliver a %s notice: %s", notice.status, type(e).__name__)
+                try:
+                    outcome = job(deps, datetime.now(UTC))
+                    log.info("%s finished: %s", name, getattr(outcome, "status", outcome))
+                    pending = _notices(kind, outcome)
+                except Exception as e:  # noqa: BLE001 - the scheduler must keep running
+                    log.error("%s failed: %s", name, type(e).__name__)
+                    pending = [
+                        Notice(
+                            kind,
+                            "failed",
+                            "",
+                            f"{name} failed: {redact_amounts(type(e).__name__)}",
+                        )
+                    ]
+                for notice in pending:
+                    try:
+                        deps.notify(notice)
+                    except Exception as e:  # noqa: BLE001 - a broken alert path must not stop jobs
+                        log.error(
+                            "could not deliver a %s notice: %s", notice.status, type(e).__name__
+                        )
+        except Exception as e:  # noqa: BLE001 - deps could not be opened
+            log.error("%s could not start: %s", name, type(e).__name__)
+            log_notice(Notice(kind, "failed", "", f"{name} could not start"))
 
     return fire
 
@@ -137,6 +169,13 @@ def build_scheduler(source: DepsSource, schedule: Schedule | None = None) -> Blo
         daily_trigger(schedule),
         id=SNAPSHOT_JOB,
         misfire_grace_time=_until_midnight(schedule.daily_check_time),
+        **options,
+    )
+    scheduler.add_job(
+        guarded("heartbeat", "heartbeat", source, heartbeat_job),
+        heartbeat_trigger(schedule),
+        id=HEARTBEAT_JOB,
+        misfire_grace_time=_until_midnight(schedule.heartbeat_time),
         **options,
     )
     return scheduler

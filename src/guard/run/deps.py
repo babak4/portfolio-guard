@@ -30,7 +30,7 @@ log = logging.getLogger("guard.run")
 
 
 def log_notice(notice: Notice) -> None:
-    """The default notifier: a warning in the log. The alert layer replaces it."""
+    """The fallback notifier: a warning in the log. ``default_deps`` installs the alert sender."""
     log.warning("%s %s %s: %s", notice.kind, notice.slot, notice.status, notice.message)
 
 
@@ -62,7 +62,7 @@ def default_deps() -> Deps:
     sink = MarketStore(warehouse).raw_sink
     base_url = os.environ.get("GUARD_T212_BASE_URL", LIVE_BASE_URL)
     manual = data_dir() / "manual_holdings.yaml"
-    return Deps(
+    deps = Deps(
         config=config,
         config_version=version,
         ops=ops,
@@ -74,3 +74,7 @@ def default_deps() -> Deps:
         funds=load_registry,
         clock=lambda: datetime.now(UTC),
     )
+    from guard.notify.deliver import make_notifier
+
+    deps.notify = make_notifier(deps)
+    return deps

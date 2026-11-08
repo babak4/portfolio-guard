@@ -5,6 +5,7 @@ schedule:
   weekly_weekday: wednesday      # tested parameter; the backtest sweeps all weekdays
   weekly_time: "12:00"
   daily_check_time: "22:30"
+  heartbeat_time: "18:00"        # same day as the weekly run; alerts if that week has no run
 
 signals:
   trend_method: sma_days         # candidates: sma_days (200-day), sma_months (10-month)

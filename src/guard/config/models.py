@@ -16,6 +16,7 @@ class Schedule(_Strict):
     weekly_weekday: Literal["monday", "tuesday", "wednesday", "thursday", "friday"]
     weekly_time: str
     daily_check_time: str
+    heartbeat_time: str = "18:00"
 
 
 class Signals(_Strict):
