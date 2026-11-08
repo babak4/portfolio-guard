@@ -42,7 +42,7 @@ the drawdown cap, the signal thresholds and the GIA policy.
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.14 (uv installs it from `.python-version`).
 
 ```bash
-uv sync
+make setup      # uv sync
 ```
 
 Guard keeps real data outside the repository. Point it at a directory of your choice:
@@ -80,7 +80,7 @@ They are never logged or committed. Names used so far:
 The daily portfolio snapshot job is the only runnable service so far:
 
 ```bash
-uv run python -m guard.ingest.snapshot_job
+make snapshot   # uv run python -m guard.ingest.snapshot_job
 ```
 
 It fires once a day at the configured time. `GUARD_T212_BASE_URL` selects the host (default
@@ -92,8 +92,8 @@ see [docs/queries/t212-payload-shapes.md](docs/queries/t212-payload-shapes.md).
 ### Backtest and the Phase 0 report
 
 ```bash
-uv run python -m guard.backtest.run --quick      # small grid, a few minutes
-uv run python -m guard.backtest.run              # full grid
+make backtest-quick    # small grid, a few minutes
+make backtest          # full grid
 ```
 
 It builds the GBP global-equity history, replays the weekly ladder, runs the benchmarks, a parameter sweep,
