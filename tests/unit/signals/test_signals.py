@@ -67,3 +67,8 @@ def test_volatility_below_threshold_is_not_negative() -> None:
 
 def test_volatility_needs_window_plus_one_levels() -> None:
     assert volatility_signal([100.0, 101.0], window=5, threshold=0.2).data_gap is True
+
+
+def test_drawdown_with_fewer_levels_than_the_lookback_is_a_data_gap() -> None:
+    assert drawdown_signal([100.0, 80.0], lookback=3, threshold=0.1).data_gap is True
+    assert drawdown_signal([100.0, 90.0, 80.0], lookback=3, threshold=0.1).data_gap is False

@@ -13,7 +13,7 @@ import hashlib
 import itertools
 import json
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -121,7 +121,11 @@ class TrialResult:
 
 
 class TrialLog:
-    """Append-only JSON-lines record of every trial run; ``count`` is the number of lines."""
+    """Append-only JSON-lines record of every trial run.
+
+    Opening an existing log appends to it; only ``reset=True`` empties it. ``count`` is the number
+    of lines in the whole log, ``session_count`` the number recorded through this object.
+    """
 
     def __init__(self, path: Path | str, *, reset: bool = False) -> None:
         self.path = Path(path)
@@ -129,9 +133,19 @@ class TrialLog:
         if reset or not self.path.exists():
             self.path.write_text("")
         self.count = len(self.path.read_text().splitlines())
+        self.session_count = 0
+
+    def distinct_combinations(self) -> int:
+        """Number of different parameter sets in the whole log."""
+        seen = set()
+        for line in self.path.read_text().splitlines():
+            params = json.loads(line)["params"]
+            seen.add(json.dumps(params, sort_keys=True, default=repr))
+        return len(seen)
 
     def record(self, trial: TrialResult, stage: str) -> None:
         self.count += 1
+        self.session_count += 1
         line = json.dumps(trial.to_record(self.count, stage), sort_keys=True, default=repr)
         with self.path.open("a") as f:
             f.write(line + "\n")
@@ -224,16 +238,30 @@ def manifest_hash(result: BacktestResult) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
+def benchmark_options(cfg: GuardConfig, **overrides: Any) -> dict[str, Any]:
+    """Run parameters for a benchmark: the same ones the strategy runs with (spread, drift band,
+    weekday and so on, from the configuration), so a benchmark never trades on other terms."""
+    return dict(asdict(BacktestParams.from_config(cfg, **overrides)))
+
+
 def buy_and_hold(
-    equity: Series, safe: Series, cfg: GuardConfig, *, data_version: str, config_version: str = ""
+    equity: Series,
+    safe: Series,
+    cfg: GuardConfig,
+    *,
+    data_version: str,
+    config_version: str = "",
+    weekday: int | None = None,
 ) -> BacktestResult:
     """The reference portfolio: the ladder's step-0 mix, never rebalanced."""
+    over = {} if weekday is None else {"weekday": weekday}
     return BENCHMARKS["current_mix"](
         equity,
         safe,
         equity_weight=cfg.ladder.steps[0].equity,
         data_version=data_version,
         config_version=config_version,
+        **benchmark_options(cfg, **over),
     )
 
 
@@ -247,8 +275,13 @@ def run_trial(
     data_version: str,
     config_version: str = "",
     lag_years: int = 3,
+    log: TrialLog | None = None,
+    stage: str = "trial",
 ) -> tuple[TrialResult, BacktestResult]:
-    """Run one parameter set. ``params`` may include ``safe_asset`` (a label only)."""
+    """Run one parameter set. ``params`` may include ``safe_asset`` (a label only).
+
+    When ``log`` is given the trial is recorded under ``stage``, so no run goes uncounted.
+    """
     signals, ladder, bp = apply_params(cfg, params)
     result = run_backtest(
         equity,
@@ -262,7 +295,10 @@ def run_trial(
     metrics = headline_metrics(
         result, benchmark, step0_equity=ladder.steps[0].equity, lag_years=lag_years
     )
-    return TrialResult(dict(params), metrics, manifest_hash(result)), result
+    trial = TrialResult(dict(params), metrics, manifest_hash(result))
+    if log is not None:
+        log.record(trial, stage)
+    return trial, result
 
 
 def run_sweep(
@@ -311,8 +347,9 @@ def run_sweep(
             data_version=dv,
             config_version=config_version,
             lag_years=lag_years,
+            log=log,
+            stage="sweep",
         )
-        log.record(trial, "sweep")
         out.append(trial)
         if progress is not None:
             progress(i + 1, len(points))

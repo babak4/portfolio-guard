@@ -62,9 +62,10 @@ def test_zero_denominators_give_none():
     assert metrics.sharpe([1.0, 1.0, 1.0]) is None
 
 
-def test_turnover_is_annual_traded_over_average_value():
+def test_turnover_is_one_way_annual_traded_over_average_value():
     dates = [date(2020, 1, 1), date(2024, 1, 1)]
-    assert metrics.turnover(100000.0, dates, [40000.0, 60000.0]) == pytest.approx(0.5)
+    # 100000 across both legs is 50000 one way; over exactly 4 years on a 50000 average: 0.25
+    assert metrics.turnover(100000.0, dates, [40000.0, 60000.0]) == pytest.approx(0.25)
 
 
 def test_time_defensive():
@@ -104,3 +105,40 @@ def test_rolling_lag_in_percent_per_year():
     same = metrics.rolling_lag(dates, [1.0, 1.1, 1.2], [1.0, 1.1, 1.2], years=1)
     assert [x for _, x in same] == [0.0, 0.0]
     assert metrics.rolling_lag(dates, [1.0, 1.1, 1.2], [1.0, 1.1, 1.2], years=5) == []
+
+
+ONE = ([date(2024, 1, 1)], [1.0])
+TWO = ([date(2024, 1, 1), date(2024, 1, 2)], [1.0, 1.1])
+GROWTH = [1.01**k for k in range(30)]
+NOISY_FLAT = [1.0 + (1e-16 if k % 2 else 0.0) for k in range(30)]
+
+
+@pytest.mark.parametrize("series", [ONE[1], TWO[1]])
+def test_short_series_give_none_instead_of_raising(series):
+    assert metrics.volatility(series) is None
+    assert metrics.sharpe(series) is None
+    assert metrics.sortino(series) is None
+
+
+def test_short_series_turnover_is_none_and_cagr_is_a_clear_value_error():
+    assert metrics.turnover(10.0, *ONE) is None
+    assert metrics.turnover(10.0, ONE[0] * 1, [0.0]) is None
+    with pytest.raises(ValueError, match="two points"):
+        metrics.cagr(*ONE)
+    assert metrics.calmar(*ONE) is None
+    assert metrics.calmar(*TWO) is None
+    assert metrics.time_to_recover(*ONE) == 0
+
+
+@pytest.mark.parametrize("series", [GROWTH, NOISY_FLAT])
+def test_constant_growth_and_float_noise_flat_series_have_no_ratio(series):
+    assert metrics.sharpe(series) is None
+    assert metrics.sortino(series) is None
+    assert metrics.volatility(series) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_float_noise_drawdown_counts_as_no_drawdown():
+    d = [date(2024, 1, k) for k in (1, 2, 3)]
+    idx = [1.0, 1.0 + 1e-15, 1.0]
+    assert metrics.calmar(d, idx) is None
+    assert metrics.time_to_recover(d, idx) == 0

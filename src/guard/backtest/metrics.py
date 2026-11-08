@@ -16,6 +16,7 @@ from guard.ladder import Decision
 TRADING_DAYS = 252
 DAYS_PER_YEAR = 365.25
 WHIPSAW_DAYS = 28
+_TOL = 1e-12
 
 
 @dataclass(frozen=True)
@@ -36,10 +37,14 @@ def _returns(index: Sequence[float]) -> list[float]:
 
 
 def cagr(dates: Sequence[date], index: Sequence[float]) -> float:
-    """Compound annual growth rate between the first and last points."""
-    years = _years(dates)
-    if len(index) < 2 or years <= 0:
-        raise ValueError("need at least two points on different dates")
+    """Compound annual growth rate between the first and last points.
+
+    Raises ValueError (None would read as zero growth) unless there are two points on different
+    dates and a positive starting level.
+    """
+    years = _years(dates) if dates else 0.0
+    if len(index) < 2 or years <= 0 or index[0] <= 0:
+        raise ValueError("need at least two points on different dates and a positive start")
     return float((index[-1] / index[0]) ** (1.0 / years) - 1.0)
 
 
@@ -59,7 +64,7 @@ def max_drawdown(dates: Sequence[date], index: Sequence[float]) -> Drawdown:
 def time_to_recover(dates: Sequence[date], index: Sequence[float]) -> int | None:
     """Calendar days from the max-drawdown trough back to the prior peak level; None if never."""
     dd = max_drawdown(dates, index)
-    if dd.depth == 0.0:
+    if abs(dd.depth) < _TOL:
         return 0
     peak_level = index[list(dates).index(dd.peak)]
     start = list(dates).index(dd.trough)
@@ -75,33 +80,58 @@ def _mean_std(xs: Sequence[float]) -> tuple[float, float]:
     return mean, math.sqrt(var)
 
 
-def volatility(index: Sequence[float]) -> float:
-    """Annualised sample standard deviation of daily returns."""
-    return _mean_std(_returns(index))[1] * math.sqrt(TRADING_DAYS)
+def volatility(index: Sequence[float]) -> float | None:
+    """Annualised sample standard deviation of daily returns; None with fewer than two returns
+    (three points), where a sample deviation is undefined."""
+    rets = _returns(index)
+    if len(rets) < 2:
+        return None
+    return _mean_std(rets)[1] * math.sqrt(TRADING_DAYS)
 
 
 def sharpe(index: Sequence[float]) -> float | None:
-    """Annualised mean over standard deviation of daily returns (risk-free rate 0)."""
-    mean, std = _mean_std(_returns(index))
-    return None if std == 0 else mean / std * math.sqrt(TRADING_DAYS)
+    """Annualised mean over standard deviation of daily returns (risk-free rate 0).
+
+    None with fewer than two returns, or when the deviation is below 1e-12 (a flat or
+    constant-growth series, where the ratio would be numerical noise).
+    """
+    rets = _returns(index)
+    if len(rets) < 2:
+        return None
+    mean, std = _mean_std(rets)
+    return None if std < _TOL else mean / std * math.sqrt(TRADING_DAYS)
 
 
 def sortino(index: Sequence[float]) -> float | None:
-    """Annualised mean over downside deviation below 0 (risk-free rate 0); None if no downside."""
+    """Annualised mean over downside deviation below 0 (risk-free rate 0).
+
+    None with fewer than two returns, or when the downside deviation is below 1e-12.
+    """
     rets = _returns(index)
+    if len(rets) < 2:
+        return None
     downside = math.sqrt(sum(min(r, 0.0) ** 2 for r in rets) / len(rets))
-    return None if downside == 0 else (sum(rets) / len(rets)) / downside * math.sqrt(TRADING_DAYS)
+    return None if downside < _TOL else (sum(rets) / len(rets)) / downside * math.sqrt(TRADING_DAYS)
 
 
 def calmar(dates: Sequence[date], index: Sequence[float]) -> float | None:
-    """CAGR over the absolute max drawdown; None when there was no drawdown."""
+    """CAGR over the absolute max drawdown; None when there was no drawdown (under 1e-12).
+
+    Raises ValueError, like ``cagr``, when a drawdown exists but the span is not positive.
+    """
     depth = max_drawdown(dates, index).depth
-    return None if depth == 0 else cagr(dates, index) / abs(depth)
+    return None if abs(depth) < _TOL else cagr(dates, index) / abs(depth)
 
 
-def turnover(total_traded: float, dates: Sequence[date], values: Sequence[float]) -> float:
-    """Annual traded value (buy plus sell legs) divided by the average portfolio value."""
-    return total_traded / _years(dates) / (sum(values) / len(values))
+def turnover(total_traded: float, dates: Sequence[date], values: Sequence[float]) -> float | None:
+    """One-way annual turnover: half the traded value (buy plus sell legs) per year, over the
+    average portfolio value. None when the span or the average value is not positive."""
+    if len(dates) < 2 or not values:
+        return None
+    years, average = _years(dates), sum(values) / len(values)
+    if years <= 0 or average <= 0:
+        return None
+    return total_traded / 2.0 / years / average
 
 
 def time_defensive(advised_equity: Sequence[float], step0_equity: float) -> float:

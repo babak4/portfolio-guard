@@ -16,6 +16,30 @@ def _decision(
     return after, Decision(kind, before.equity, after.equity, after.step, reasons)  # type: ignore[arg-type]
 
 
+def _reconcile(
+    state: LadderState, signals: Signals, week: int, cfg: Ladder
+) -> tuple[LadderState, Decision] | None:
+    """Walk equity toward the weight of the current step when it is not there yet.
+
+    Used when the signals agree with the step already in force but an earlier move was capped,
+    interrupted or cancelled. Equity above the step weight comes down; equity below it (a
+    cancelled re-entry) goes back up only while the trend is not negative. Each week moves at most
+    the weekly cap and ignores the cooldown, the minimum shift and confirmation, because the
+    decision to move was already taken.
+    """
+    dest = max(cfg.steps[state.step].equity, cfg.equity_floor)
+    gap = state.equity - dest
+    if gap > _EPS:
+        equity = state.equity - min(gap, cfg.max_weekly_change)
+        after = replace(state, equity=equity, streak=0, last_change_week=week)
+        return _decision("continue", state, after, "remainder of an earlier reduction")
+    if gap < -_EPS and not signals.trend.negative:
+        equity = state.equity + min(-gap, cfg.max_weekly_change)
+        after = replace(state, equity=equity, streak=0, last_change_week=week)
+        return _decision("reentry", state, after, "back to the step weight")
+    return None
+
+
 def advance(
     state: LadderState, signals: Signals, week: int, cfg: Ladder
 ) -> tuple[LadderState, Decision]:
@@ -62,8 +86,11 @@ def advance(
                 last_change_week=week,
             )
             return _decision("continue", state, after, "remainder of a capped reduction")
-        state = replace(state, pending_equity=None)
-        notes.append("pending reduction replaced by a changed signal")
+
+    if target == state.step and state.pending_equity is None:
+        reconciled = _reconcile(state, signals, week, cfg)
+        if reconciled is not None:
+            return reconciled
 
     if target > state.step:
         streak = state.streak + 1
@@ -72,8 +99,11 @@ def advance(
                 "hold", state, replace(state, streak=streak), *notes, "awaiting confirmation"
             )
         dest = max(cfg.steps[target].equity, cfg.equity_floor)
-        shift = state.equity - dest
-        if shift < cfg.min_shift - _EPS:
+        # The minimum applies to the step change itself, so a cancelled re-entry that left equity
+        # close to the destination does not strand the ladder one step short of its weight.
+        step_shift = max(cfg.steps[state.step].equity, cfg.equity_floor, state.equity) - dest
+        shift = max(state.equity - dest, 0.0)
+        if step_shift < cfg.min_shift - _EPS:
             return _decision(
                 "hold", state, replace(state, streak=streak), *notes, "shift below the minimum"
             )
@@ -94,6 +124,8 @@ def advance(
             last_change_week=week,
             pending_equity=dest if remaining > _EPS else None,
         )
+        if state.pending_equity is not None:
+            notes.append("pending reduction replaced by a changed signal")
         return _decision("derisk", state, after, *notes, "fast path" if fast else "confirmed")
 
     if target < state.step:
@@ -103,7 +135,9 @@ def advance(
             )
         dest = max(cfg.steps[target].equity, cfg.equity_floor)
         if dest <= state.equity + _EPS:
-            return _decision("hold", state, replace(state, step=target, streak=0), *notes)
+            return _decision(
+                "hold", state, replace(state, step=target, streak=0, pending_equity=None), *notes
+            )
         tranche = min((dest - state.equity) / cfg.reentry_tranches, cfg.max_weekly_change)
         move = min(tranche, dest - state.equity)
         equity = state.equity + move
@@ -116,7 +150,10 @@ def advance(
             last_change_week=week,
             reentry_dest=None if done else dest,
             reentry_tranche=0.0 if done else tranche,
+            pending_equity=None,
         )
+        if state.pending_equity is not None:
+            notes.append("pending reduction replaced by a changed signal")
         return _decision("reentry", state, after, *notes, "main signal positive")
 
     return _decision("hold", state, replace(state, streak=0), *notes, "no change")

@@ -140,3 +140,29 @@ def test_env_is_not_needed_for_settings():
     os.environ.pop("GUARD_DATA_DIR", None)
     assert load_settings().targets.annual_lag_pct == 1.0
     assert date  # keep the import used
+
+
+def test_trial_log_counts_this_session_apart_from_the_whole_log(tmp_path):
+    p = tmp_path / "t.jsonl"
+    first = TrialLog(p)
+    first.record(TrialResult({"a": 1}, {}, "h1"), "x")
+    first.record(TrialResult({"a": 1}, {}, "h2"), "x")  # same parameters again
+    second = TrialLog(p)  # a later invocation appends, it does not truncate
+    assert second.count == 2 and second.session_count == 0
+    second.record(TrialResult({"a": 2}, {}, "h3"), "x")
+    assert second.count == 3 and second.session_count == 1
+    assert second.distinct_combinations() == 2
+    assert TrialLog(p, reset=True).count == 0
+
+
+def test_run_trial_logs_itself_when_given_a_log(cfg, tmp_path):
+    from guard.backtest.sweep import buy_and_hold, default_params, run_trial
+
+    eq, sf = world(n=900)
+    log = TrialLog(tmp_path / "t.jsonl")
+    bench = buy_and_hold(eq, sf, cfg, data_version="d")
+    p = default_params(cfg)
+    run_trial(eq, sf, p, cfg, benchmark=bench, data_version="d")
+    assert log.count == 0
+    run_trial(eq, sf, p, cfg, benchmark=bench, data_version="d", log=log, stage="direct")
+    assert log.count == 1 and '"stage": "direct"' in (tmp_path / "t.jsonl").read_text()

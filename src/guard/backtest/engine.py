@@ -1,6 +1,10 @@
 """Daily-resolution simulator that replays the weekly ladder over two aligned GBP level series.
 
 Pure: no I/O, no clock, no randomness. Identical inputs give byte-identical canonical output.
+
+Costs: ``spread`` is the cost per unit of traded value on each leg. A rebalance that sells ``x``
+of one asset and buys ``x`` of the other trades ``2x`` in total (two legs) and costs
+``spread * 2x``, charged once. ``BacktestResult.total_traded`` sums both legs.
 """
 
 from __future__ import annotations
@@ -8,7 +12,7 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Literal
 
 from guard.config.models import GuardConfig, Ladder, Signals
@@ -38,7 +42,8 @@ _WEEKDAYS = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday":
 class BacktestParams:
     """Run parameters. ``weekday`` is 0 (Monday) to 4 (Friday).
 
-    ``spread`` is a fraction of traded value (buy plus sell legs) charged on every rebalance.
+    ``spread`` is the cost per unit of traded value on each leg (not a round-trip figure): a
+    rebalance selling ``x`` and buying ``x`` pays ``spread * 2x``, once, on every rebalance.
     ``drift_band`` is the allowed gap between actual and advised equity weight on a decision day
     when the ladder did not move. ``gia_share`` and ``monthly_gia_contribution`` only apply in
     ``realistic`` mode.
@@ -278,7 +283,7 @@ def run_backtest(
     advised = [state.equity]
     decisions: list[tuple[date, Decision]] = []
     traded_total = 0.0
-    week = 0
+    first_week: int | None = None
     longest = TRADING_DAYS_PER_WEEK + 1
 
     for t in range(1, n):
@@ -301,7 +306,11 @@ def run_backtest(
         sleeves = [Sleeve(s.name, s.tradable, s.equity * r_eq, s.safe * r_sf) for s in sleeves]
 
         if t in decision_set:
-            week += 1
+            # Whole calendar weeks since the first decision, so cooldowns mean real weeks whatever
+            # the cadence.
+            monday = (dates[t] - timedelta(days=dates[t].weekday())).toordinal() // 7
+            first_week = monday if first_week is None else first_week
+            week = monday - first_week + 1
             sig = _signals_at(t, dates, eq, signals, longest)
             new_state, decision = advance(state, sig, week, ladder)
             moved = abs(new_state.equity - state.equity) > _EPS

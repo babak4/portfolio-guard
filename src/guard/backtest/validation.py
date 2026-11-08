@@ -6,6 +6,7 @@ function returns what it used so the report can show it.
 
 from __future__ import annotations
 
+import itertools
 import statistics
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
@@ -14,7 +15,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from guard.backtest import metrics as m
-from guard.backtest.engine import Series
+from guard.backtest.engine import BacktestResult, Series
 from guard.backtest.sweep import (
     Params,
     TrialLog,
@@ -28,6 +29,11 @@ from guard.backtest.sweep import (
     run_trial,
 )
 from guard.config.models import GuardConfig
+
+
+class InsufficientHistory(ValueError):
+    """The history is too short for the requested analysis (and nothing else went wrong)."""
+
 
 Cell = tuple[Any, Any]
 _DD, _LAG = "max_drawdown", "worst_lag"
@@ -63,6 +69,7 @@ class PlateauProposal:
     region: list[Cell]
     best_point: Cell
     params: Params
+    meets_targets: bool = True
 
 
 def _matches(t: TrialResult, fixed: Mapping[str, Any] | None) -> bool:
@@ -166,6 +173,8 @@ def propose_plateau_centre(
     floors: Mapping[str, float],
     fixed: Mapping[str, Any] | None = None,
     objective: str = "calmar",
+    max_drawdown_limit: float | None = None,
+    lag_limit: float | None = None,
 ) -> PlateauProposal:
     """The centre of the largest plateau in the (x, y) slice, not the best single point.
 
@@ -173,11 +182,27 @@ def propose_plateau_centre(
     leaving ``tolerance`` of that cell's max drawdown and lag. The largest plateau wins (ties go
     to the higher plateau score, then the higher objective); its centre is the cell nearest the
     plateau's centroid, with ties broken toward the higher objective.
+
+    With ``max_drawdown_limit`` (a negative fraction) and ``lag_limit`` (percent a year) only cells
+    that meet both targets can form a plateau, so a large flat region of poor results cannot win
+    on size. When no cell meets them the best-scoring region over all cells is returned with
+    ``meets_targets`` False.
     """
     xs, ys, cells = _cells(trials, x_key, y_key, fixed)
     usable = {c: v for c, v in cells.items() if v.get(_DD) is not None and v.get(_LAG) is not None}
     if not usable:
         raise ValueError("no trials with drawdown and lag in this slice")
+
+    def meets(v: Mapping[str, float | None]) -> bool:
+        dd, lag = v.get(_DD), v.get(_LAG)
+        assert dd is not None and lag is not None
+        return (max_drawdown_limit is None or dd >= max_drawdown_limit) and (
+            lag_limit is None or lag <= lag_limit
+        )
+
+    eligible = {c: v for c, v in usable.items() if meets(v)}
+    meets_targets = bool(eligible)
+    pool = eligible if meets_targets else usable
 
     def obj(c: Cell) -> float:
         v = usable[c].get(objective)
@@ -195,7 +220,7 @@ def propose_plateau_centre(
                     continue
                 n = (xs[jx], ys[jy])
                 if (
-                    n in usable
+                    n in pool
                     and n not in seen
                     and _similar(usable[n], usable[seed], tolerance, floors)
                 ):
@@ -205,7 +230,7 @@ def propose_plateau_centre(
 
     best_region: list[Cell] = []
     best_key: tuple[float, ...] | None = None
-    for seed in usable:
+    for seed in pool:
         reg = region_of(seed)
         key = (len(reg), _score(xs, ys, usable, seed, tolerance, floors), obj(seed))
         if best_key is None or key > best_key:
@@ -229,6 +254,54 @@ def propose_plateau_centre(
         region=best_region,
         best_point=best_point,
         params={x_key: centre[0], y_key: centre[1]},
+        meets_targets=meets_targets,
+    )
+
+
+def joint_plateau_score(
+    trials: Sequence[TrialResult],
+    axes: Sequence[str],
+    centre: Mapping[str, Any],
+    tolerance: float,
+    floors: Mapping[str, float],
+    fixed: Mapping[str, Any] | None = None,
+) -> float | None:
+    """Plateau score of ``centre`` with every axis in ``axes`` varied at once.
+
+    The neighbours are all grid points one step away on any subset of the axes (diagonals
+    included). Other parameters are held at ``fixed``. None when the centre has no result.
+    """
+    buckets: dict[tuple[Any, ...], list[TrialResult]] = defaultdict(list)
+    for t in trials:
+        if all(a in t.params for a in axes) and _matches(t, fixed):
+            buckets[tuple(t.params[a] for a in axes)].append(t)
+    cells = {
+        k: {
+            m_: _median([v for t in ts if (v := t.metrics.get(m_)) is not None])
+            for m_ in (_DD, _LAG)
+        }
+        for k, ts in buckets.items()
+    }
+    key = tuple(centre[a] for a in axes)
+    if key not in cells or any(cells[key][m_] is None for m_ in (_DD, _LAG)):
+        return None
+    levels = [sorted({k[i] for k in cells}) for i in range(len(axes))]
+    pos = [lv.index(key[i]) for i, lv in enumerate(levels)]
+    steps = [
+        [j for j in (p - 1, p, p + 1) if 0 <= j < len(lv)]
+        for p, lv in zip(pos, levels, strict=True)
+    ]
+    neighbours = []
+    for combo in itertools.product(*steps):
+        if list(combo) == pos:
+            continue
+        n = tuple(levels[i][j] for i, j in enumerate(combo))
+        if n in cells:
+            neighbours.append(n)
+    if not neighbours:
+        return 0.0
+    return sum(_similar(cells[n], cells[key], tolerance, floors) for n in neighbours) / len(
+        neighbours
     )
 
 
@@ -270,10 +343,12 @@ def choose_parameters(
     scored: Sequence[tuple[Params, float | None]], default: Params, tie_tolerance: float
 ) -> tuple[Params, float | None]:
     """The best-scoring setting; scores within ``tie_tolerance`` of the best tie, and the tie goes
-    to the setting differing from ``default`` on the fewest axes (then the earliest listed)."""
+    to the setting differing from ``default`` on the fewest axes (then the earliest listed).
+    When no setting has a score, the result is ``default`` on the grid's axes with score None."""
     usable = [(p, s) for p, s in scored if s is not None]
     if not usable:
-        return dict(scored[0][0]), None
+        # No training score at all: keep the configured setting rather than an arbitrary point.
+        return {k: default.get(k, v) for k, v in scored[0][0].items()}, None
     top = max(s for _, s in usable)
     tied = [(p, s) for p, s in usable if top - s <= tie_tolerance]
 
@@ -318,6 +393,9 @@ class Fold:
     test_end: date
     params: Params
     train_score: float | None
+    test_return: float | None = None
+    default_test_return: float | None = None
+    no_valid_training_score: bool = False
 
 
 @dataclass(frozen=True)
@@ -346,6 +424,13 @@ def _slice(series: Series, last: date) -> dict[date, float]:
     return {d: v for d, v in series.items() if d <= last}
 
 
+def _block_return(
+    res: BacktestResult, pos: Mapping[date, int], test_dates: Sequence[date]
+) -> float:
+    first, last = pos[test_dates[0]], pos[test_dates[-1]]
+    return res.index[last] / res.index[first - 1] - 1.0
+
+
 def walk_forward(
     equity: Series,
     safe: Series,
@@ -357,6 +442,7 @@ def walk_forward(
     config_version: str = "",
     trial_log: TrialLog | None = None,
     lag_years: int = 3,
+    anchor: Params | None = None,
 ) -> WalkForwardResult:
     """Anchored expanding-window walk-forward with the stitched out-of-sample index.
 
@@ -365,11 +451,20 @@ def walk_forward(
     keep only the next ``test_years`` of the run. The strategy has seen no data after the
     training end when its parameters are picked; blocks are disjoint and chained so the stitched
     index is time-weighted. ``settings.pinned`` axes are held at one value.
+
+    Limitation: the engine cannot start from a given ladder state, so each fold's strategy is
+    replayed from the start of the history with that fold's parameters. Its ladder state at the
+    block start is what those parameters would have produced, not the state the previous fold's
+    parameters actually left. The configured setting is run the same way on every block
+    (``default_test_return``) as the comparison. Raises ``InsufficientHistory`` when the history
+    cannot hold one training window plus one test block.
     """
     dates = sorted(set(equity) & set(safe))
+    if len(dates) < 2:
+        raise InsufficientHistory("fewer than two dates in common")
     full_grid = {**grid, **{k: [v] for k, v in settings.pinned.items()}}
     points = expand_grid(full_grid)
-    anchor = default_params(cfg)
+    anchor = dict(anchor) if anchor is not None else default_params(cfg)
     windows = walk_forward_windows(
         dates[0],
         dates[-1],
@@ -399,16 +494,16 @@ def walk_forward(
                 data_version=data_version,
                 config_version=config_version,
                 lag_years=lag_years,
+                log=trial_log,
+                stage="walk_forward_train",
             )
-            if trial_log is not None:
-                trial_log.record(trial, "walk_forward_train")
             scored.append((p, trial.metrics.get(settings.objective)))
         chosen, score = choose_parameters(scored, anchor, settings.tie_tolerance)
 
         test_end = test_dates[-1]
         eq_te, sf_te = _slice(equity, test_end), _slice(safe, test_end)
         bench_te = buy_and_hold(eq_te, sf_te, cfg, data_version=data_version)
-        trial, res = run_trial(
+        _, res = run_trial(
             eq_te,
             sf_te,
             chosen,
@@ -417,9 +512,21 @@ def walk_forward(
             data_version=data_version,
             config_version=config_version,
             lag_years=lag_years,
+            log=trial_log,
+            stage="walk_forward_test",
         )
-        if trial_log is not None:
-            trial_log.record(trial, "walk_forward_test")
+        _, default_res = run_trial(
+            eq_te,
+            sf_te,
+            anchor,
+            cfg,
+            benchmark=bench_te,
+            data_version=data_version,
+            config_version=config_version,
+            lag_years=lag_years,
+            log=trial_log,
+            stage="walk_forward_default_test",
+        )
         pos = {d: i for i, d in enumerate(res.dates)}
         if not out_dates:
             out_dates, out_idx, out_bench = [train_end], [1.0], [1.0]
@@ -428,9 +535,21 @@ def walk_forward(
             out_dates.append(d)
             out_idx.append(out_idx[-1] * res.index[k] / res.index[k - 1])
             out_bench.append(out_bench[-1] * bench_te.index[k] / bench_te.index[k - 1])
-        folds.append(Fold(dates[0], train_end, test_dates[0], test_end, chosen, score))
+        folds.append(
+            Fold(
+                dates[0],
+                train_end,
+                test_dates[0],
+                test_end,
+                chosen,
+                score,
+                test_return=_block_return(res, pos, test_dates),
+                default_test_return=_block_return(default_res, pos, test_dates),
+                no_valid_training_score=score is None,
+            )
+        )
     if len(out_dates) < 2:
-        raise ValueError("not enough history for even one walk-forward block")
+        raise InsufficientHistory("not enough history for even one walk-forward block")
     metrics = _basic_metrics(out_dates, out_idx)
     bench_metrics = _basic_metrics(out_dates, out_bench)
     lags = rolling_lag_fast(out_dates, out_idx, out_bench, lag_years)
@@ -444,9 +563,14 @@ def walk_forward(
 
 @dataclass(frozen=True)
 class WeekdayVerdict:
+    """``determined`` is False when there is not enough data to say; then ``wednesday_stays`` is
+    False too and the text says so. ``offsets_used`` counts the start offsets that were paired."""
+
     wednesday_stays: bool
     beaten_by: list[int]
     text: str
+    determined: bool = True
+    offsets_used: int = 0
 
 
 @dataclass(frozen=True)
@@ -511,11 +635,17 @@ def weekday_offsets(
                 data_version=dv,
                 config_version=config_version,
                 lag_years=lag_years,
+                log=trial_log,
+                stage="weekday_offsets",
             )
-            if trial_log is not None:
-                trial_log.record(trial, "weekday_offsets")
             runs.append((wd, off, trial.metrics))
     return WeekdayOffsetResult.from_runs(runs)
+
+
+def _by_offset(result: WeekdayOffsetResult, weekday: int, metric: str) -> dict[int, float]:
+    return {
+        off: v for wd, off, mt in result.runs if wd == weekday and (v := mt.get(metric)) is not None
+    }
 
 
 def wednesday_verdict(
@@ -525,40 +655,62 @@ def wednesday_verdict(
     higher_is_better: bool = True,
     reference: int = 2,
 ) -> WeekdayVerdict:
-    """Wednesday stays unless another weekday's median beats Wednesday's median by more than the
-    noise: the widest spread (max minus min across start offsets) of any weekday's own results."""
-    ref = result.per_weekday.get(reference, {}).get(metric)
-    if ref is None:
+    """Wednesday stays unless another weekday beats it beyond noise, judged on paired results.
+
+    Each other weekday is compared with Wednesday at the same start offset. It beats Wednesday if
+    the median of those paired differences exceeds their own spread (maximum minus minimum), so a
+    start-offset swing that moves both days together does not count as noise. Without a
+    Wednesday result, or with fewer than two paired offsets, the verdict is undetermined.
+    """
+    name = _WEEKDAY_NAMES[reference]
+    ref = _by_offset(result, reference, metric)
+    if not ref:
         return WeekdayVerdict(
-            True, [], f"No {_WEEKDAY_NAMES[reference]} result on {metric}; keep it."
+            False, [], f"Undetermined: there is no {name} result on {metric}.", determined=False
         )
     sign = 1.0 if higher_is_better else -1.0
-    spread = max(r[metric].max - r[metric].min for r in result.per_weekday.values() if metric in r)
     beaten: list[int] = []
-    for wd, per in sorted(result.per_weekday.items()):
-        r = per.get(metric)
-        if wd == reference or r is None:
+    details: list[str] = []
+    offsets_used = 0
+    for wd in sorted(result.per_weekday):
+        if wd == reference:
             continue
-        if sign * (r.median - ref.median) > spread:
+        other = _by_offset(result, wd, metric)
+        diffs = [sign * (other[o] - ref[o]) for o in sorted(set(other) & set(ref))]
+        offsets_used = max(offsets_used, len(diffs))
+        if len(diffs) < 2:
+            continue
+        med, spread = statistics.median(diffs), max(diffs) - min(diffs)
+        details.append(f"{_WEEKDAY_NAMES[wd]} minus {name}: median {med:+.3f}, spread {spread:.3f}")
+        if med > spread:
             beaten.append(wd)
-    name = _WEEKDAY_NAMES[reference]
-    if not beaten:
-        text = (
-            f"{name} stays: no other weekday beats it on {metric} by more than the "
-            f"{spread:.3f} spread across start offsets ({name}: {ref.min:.3f} to "
-            f"{ref.max:.3f}, median {ref.median:.3f})."
+    if offsets_used < 2:
+        return WeekdayVerdict(
+            False,
+            [],
+            f"Undetermined: fewer than two start offsets pair {name} with another weekday on "
+            f"{metric}.",
+            determined=False,
+            offsets_used=offsets_used,
         )
+    basis = (
+        f"paired differences against {name} at the same offset over {offsets_used} start offsets "
+        f"({'; '.join(details)})"
+    )
+    if not beaten:
+        text = f"{name} stays: no other weekday beats it on {metric} beyond noise; {basis}."
     else:
         names = ", ".join(_WEEKDAY_NAMES[w] for w in beaten)
         text = (
-            f"{name} is clearly beaten on {metric} by {names}: its median is more than the "
-            f"{spread:.3f} spread across start offsets above {name}'s median {ref.median:.3f}."
+            f"{name} is clearly beaten on {metric} by {names}: the median paired difference "
+            f"exceeds its spread; {basis}."
         )
-    return WeekdayVerdict(not beaten, beaten, text)
+    return WeekdayVerdict(not beaten, beaten, text, offsets_used=offsets_used)
 
 
 __all__ = [
     "Fold",
+    "InsufficientHistory",
     "PlateauProposal",
     "PlateauTable",
     "Range",
@@ -567,6 +719,7 @@ __all__ = [
     "WeekdayVerdict",
     "as_log",
     "choose_parameters",
+    "joint_plateau_score",
     "make_range",
     "plateau_score",
     "plateau_table",

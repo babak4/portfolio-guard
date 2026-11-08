@@ -11,7 +11,6 @@ import argparse
 import bisect
 import hashlib
 import json
-import math
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -20,8 +19,15 @@ from pathlib import Path
 from typing import Any
 
 from guard.backtest.benchmarks import BENCHMARKS
-from guard.backtest.engine import CODE_VERSION, BacktestResult, Series
+from guard.backtest.engine import (
+    CODE_VERSION,
+    BacktestParams,
+    BacktestResult,
+    Series,
+    run_fixed_weight,
+)
 from guard.backtest.report import (
+    IN_SAMPLE,
     PlateauSection,
     ReportInputs,
     proxy_share,
@@ -32,6 +38,7 @@ from guard.backtest.sweep import (
     BacktestSettings,
     Params,
     TrialLog,
+    benchmark_options,
     buy_and_hold,
     default_params,
     load_settings,
@@ -39,6 +46,8 @@ from guard.backtest.sweep import (
     run_trial,
 )
 from guard.backtest.validation import (
+    InsufficientHistory,
+    joint_plateau_score,
     plateau_table,
     propose_plateau_centre,
     walk_forward,
@@ -134,24 +143,25 @@ def default_loaders(start: date = HISTORY_START, end: date | None = None) -> Loa
 
 
 def resample_to_days(points: Mapping[date, float], days: Sequence[date]) -> dict[date, float]:
-    """Levels on ``days`` by log-linear interpolation between the series' own points.
+    """Levels on ``days``, point-in-time: each day takes the last level observed on or before it.
 
-    Days before the first or after the last point are dropped, not extrapolated. A sparse
-    (monthly) accrued level thus becomes a smooth daily one on the equity calendar.
+    The level is held flat until the next observation arrives, so a day never uses a later
+    observation. Days before the first or after the last point are dropped, not extrapolated.
     """
     keys = sorted(points)
     out: dict[date, float] = {}
     for d in days:
         if d < keys[0] or d > keys[-1]:
             continue
-        i = bisect.bisect_right(keys, d) - 1
-        if keys[i] == d or i + 1 >= len(keys):
-            out[d] = points[keys[i]]
-            continue
-        a, b = keys[i], keys[i + 1]
-        w = (d - a).days / (b - a).days
-        out[d] = math.exp((1 - w) * math.log(points[a]) + w * math.log(points[b]))
+        out[d] = points[keys[bisect.bisect_right(keys, d) - 1]]
     return out
+
+
+def carried_forward_share(points: Mapping[date, float], days: Sequence[date]) -> float:
+    """Share of the covered days that carry a level forward instead of having an observation."""
+    keys = sorted(points)
+    covered = [d for d in days if keys[0] <= d <= keys[-1]]
+    return sum(1 for d in covered if d not in points) / len(covered) if covered else 0.0
 
 
 def _chain_history(
@@ -222,8 +232,13 @@ def run_study(
     weekday: int | None,
     trial_log: TrialLog,
     progress: Callable[[str], None] | None = None,
+    prior_runs: int = 0,
 ) -> ReportInputs:
-    """Run the benchmarks, the strategy, the sweep and the validation; return the report inputs."""
+    """Run the benchmarks, the strategy, the sweep and the validation; return the report inputs.
+
+    Every strategy run goes through ``run_trial`` with ``trial_log``, so the log holds all of
+    them. ``prior_runs`` is the count from earlier invocations that appended to the same log.
+    """
     say = progress or (lambda _msg: None)
     eq: Series = {p.day: p.level for p in equity.points}
     days = list(eq)
@@ -242,14 +257,26 @@ def run_study(
     base = default_params(cfg, primary)
     if weekday is not None:
         base["weekday"] = weekday
+    bp = BacktestParams.from_config(cfg, weekday=base["weekday"])
+    bench_opts = benchmark_options(cfg, weekday=base["weekday"])
     dv = f"{data_version}:{primary}"
-    bh = buy_and_hold(eq, sf, cfg, data_version=dv, config_version=config_version)
+    bh = buy_and_hold(
+        eq, sf, cfg, data_version=dv, config_version=config_version, weekday=bp.weekday
+    )
 
-    def trial(params: Params, safe_name: str) -> BacktestResult:
-        s = safe_series[safe_name]
-        b = buy_and_hold(eq, s, cfg, data_version=f"{data_version}:{safe_name}")
+    def trial(
+        params: Params,
+        safe_name: str,
+        stage: str,
+        equity_series: Series = eq,
+        safe_levels: Series | None = None,
+    ) -> BacktestResult:
+        s = safe_series[safe_name] if safe_levels is None else safe_levels
+        b = buy_and_hold(
+            equity_series, s, cfg, data_version=f"{data_version}:{safe_name}", weekday=bp.weekday
+        )
         return run_trial(
-            eq,
+            equity_series,
             s,
             params,
             cfg,
@@ -257,33 +284,67 @@ def run_study(
             data_version=f"{data_version}:{safe_name}",
             config_version=config_version,
             lag_years=lag_years,
+            log=trial_log,
+            stage=stage,
         )[1]
 
     say("benchmarks and configured strategy")
     benchmarks: dict[str, BacktestResult] = {}
-    single = BENCHMARKS["single_tracker"](eq, sf, data_version=dv, config_version=config_version)
+    single = BENCHMARKS["single_tracker"](
+        eq, sf, **bench_opts, data_version=dv, config_version=config_version
+    )
     for b in cfg.benchmarks:
-        opts: dict[str, Any] = {"data_version": dv, "config_version": config_version}
+        opts: dict[str, Any] = {
+            **bench_opts,
+            "data_version": dv,
+            "config_version": config_version,
+        }
         if b.equity is not None:
             opts["equity_weight"] = b.equity
         name = _BENCHMARK_KINDS[b.kind]
         benchmarks[b.id] = (
             bh if name == "current_mix" and b.equity is None else BENCHMARKS[name](eq, sf, **opts)
         )
-    strategies: dict[str, BacktestResult] = {"config defaults": trial(base, primary)}
-    realistic = trial({**base, "mode": "realistic"}, primary)
+    step0 = cfg.ladder.steps[0].equity
+    rebalanced = run_fixed_weight(
+        eq,
+        sf,
+        step0,
+        schedule="decision_days",
+        params=bp,
+        data_version=dv,
+        config_version=config_version,
+        label="rebalanced_reference",
+    )
+    mix = f"{round(step0 * 100)}/{round((1 - step0) * 100)}"
+    benchmarks[f"constant {mix}, rebalanced on the drift band"] = rebalanced
+    strategies: dict[str, BacktestResult] = {"config defaults": trial(base, primary, "configured")}
+    realistic = trial({**base, "mode": "realistic"}, primary, "realistic")
     floor_only = floor_only_run(
         eq,
         sf,
         cfg.ladder,
         drift_band=cfg.rebalance.drift_band,
+        params=bp,
         data_version=dv,
         config_version=config_version,
     )
-    safe_strategies = {k: trial({**base, "safe_asset": k}, k) for k in safe_series}
-    safe_bh = {
-        k: buy_and_hold(eq, s, cfg, data_version=f"{data_version}:{k}")
-        for k, s in safe_series.items()
+
+    # All safe assets are compared on the dates every one of them (and the equity) covers.
+    common = sorted(set(eq).intersection(*(set(v) for v in safe_series.values())))
+    safe_strategies: dict[str, BacktestResult] = {}
+    safe_bh: dict[str, BacktestResult] = {}
+    if len(common) >= 2:
+        eq_c = {d: eq[d] for d in common}
+        for k, series_k in safe_series.items():
+            sc = {d: series_k[d] for d in common}
+            safe_strategies[k] = trial({**base, "safe_asset": k}, k, "safe_asset", eq_c, sc)
+            safe_bh[k] = buy_and_hold(
+                eq_c, sc, cfg, data_version=f"{data_version}:{k}", weekday=bp.weekday
+            )
+    carried = {
+        k: carried_forward_share({p.day: p.level for p in safes[k].points}, days)
+        for k in safe_series
     }
 
     grid = settings.quick_grid if quick else settings.grid
@@ -317,6 +378,8 @@ def run_study(
             floors=pl.floors,
             fixed=fixed,
             objective=pl.objective,
+            max_drawdown_limit=-settings.targets.crisis_max_drawdown,
+            lag_limit=settings.targets.annual_lag_pct,
         )
         tables = {mt: plateau_table(trials, x_key, y_key, mt, fixed) for mt in PLATEAU_METRICS}
         plateaus.append(PlateauSection(x_key, y_key, tables, prop))
@@ -324,12 +387,23 @@ def run_study(
             if k not in taken:
                 chosen[k] = v
                 taken.add(k)
+    chosen_axes = [k for k in grid if k in taken]
+    joint: float | None = None
+    if chosen_axes:
+        joint_fixed: dict[str, Any] = {"safe_asset": primary}
+        joint_fixed.update(
+            {k: _nearest(v, base[k]) for k, v in grid.items() if k not in chosen_axes}
+        )
+        joint = joint_plateau_score(
+            trials, chosen_axes, chosen, pl.tolerance, pl.floors, joint_fixed
+        )
     if any(chosen[k] != base[k] for k in taken):
-        strategies["plateau centre"] = trial(chosen, primary)
+        strategies[f"plateau centre, {IN_SAMPLE}"] = trial(chosen, primary, "plateau_centre")
 
     say("walk-forward")
     wf_grid = {k: v for k, v in grid.items() if k not in ("weekday", "mode", "safe_asset")}
     wf_grid["weekday"] = [base["weekday"]]
+    wf_note = ""
     try:
         wf = walk_forward(
             eq,
@@ -341,9 +415,13 @@ def run_study(
             config_version=config_version,
             trial_log=trial_log,
             lag_years=lag_years,
+            anchor=base,
         )
-    except ValueError:
+    except InsufficientHistory as e:
         wf = None
+        wf_note = (
+            f"Not run: the history is too short for a training window plus one test block ({e})."
+        )
 
     say("weekday and offset runs")
     offsets = (
@@ -382,6 +460,15 @@ def run_study(
         chosen_params=chosen,
         walk_forward=wf,
         quick=quick,
+        primary_safe_key=primary,
+        runs_this_invocation=trial_log.session_count,
+        distinct_combinations=trial_log.distinct_combinations(),
+        cumulative_runs=prior_runs + trial_log.session_count,
+        carried_forward=carried,
+        rebalanced_reference=rebalanced,
+        walk_forward_note=wf_note,
+        chosen_joint_score=joint,
+        chosen_axes=chosen_axes,
     )
 
 
@@ -417,7 +504,22 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="decision weekday, 0-4 or a name (default: from configuration)",
     )
+    p.add_argument(
+        "--fresh",
+        action="store_true",
+        help="empty the trial log and the cumulative run count first (default: append)",
+    )
     return p
+
+
+def _prior_runs(manifest: Path, lines_at_open: int, *, fresh: bool) -> int:
+    """Runs from earlier invocations: the manifest's counter, else the lines already in the log."""
+    if fresh:
+        return 0
+    try:
+        return int(json.loads(manifest.read_text())["cumulative_runs"])
+    except OSError, ValueError, KeyError:
+        return lines_at_open
 
 
 def main(argv: Sequence[str] | None = None, *, loaders: Loaders | None = None) -> int:
@@ -445,7 +547,8 @@ def main(argv: Sequence[str] | None = None, *, loaders: Loaders | None = None) -
         return 2
 
     folder = subdir("backtests")
-    log = TrialLog(folder / "trials.jsonl", reset=True)
+    log = TrialLog(folder / "trials.jsonl", reset=args.fresh)
+    prior = _prior_runs(folder / "manifest.json", log.count, fresh=args.fresh)
     inputs = run_study(
         equity,
         safes,
@@ -456,6 +559,7 @@ def main(argv: Sequence[str] | None = None, *, loaders: Loaders | None = None) -
         weekday=args.weekday,
         trial_log=log,
         progress=lambda msg: print(msg, file=sys.stderr),
+        prior_runs=prior,
     )
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(render_phase0_report(inputs))
@@ -474,12 +578,14 @@ def main(argv: Sequence[str] | None = None, *, loaders: Loaders | None = None) -
         },
         "seed": None,  # nothing here is random
         "trial_count": log.count,
+        "runs_this_invocation": log.session_count,
+        "cumulative_runs": inputs.cumulative_runs,
         "report": str(out),
     }
     (folder / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True, default=repr)
     )
-    print(f"wrote {out} ({log.count} trials)", file=sys.stderr)
+    print(f"wrote {out} ({log.session_count} runs, {log.count} in the log)", file=sys.stderr)
     return 0
 
 

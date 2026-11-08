@@ -27,18 +27,35 @@ DEFAULT_WINDOWS: tuple[CrisisWindow, ...] = (
 
 @dataclass(frozen=True)
 class ScenarioSummary:
-    """Max drawdowns are negative fractions measured inside the window. ``return_lag`` is the
-    buy-and-hold return minus the strategy return over the window (positive: strategy trailed)."""
+    """Max drawdowns are negative fractions: the deepest fall, with the trough inside the window,
+    from the running peak of the whole series (the peak may precede the window start).
+    ``peak_date`` is that peak's date for the strategy. ``window_start_to_end`` is the strategy's
+    drawdown measured only from the window's first value. ``return_lag`` is the buy-and-hold
+    return minus the strategy return over the window (positive: strategy trailed)."""
 
     achieved_max_drawdown: float
     buy_and_hold_max_drawdown: float
     floor_only_max_drawdown: float
     return_lag: float
+    peak_date: date | None = None
+    window_start_to_end: float | None = None
 
 
 def _slice(r: BacktestResult, w: CrisisWindow) -> tuple[list[date], list[float]]:
     pairs = [(d, v) for d, v in zip(r.dates, r.index, strict=True) if w.start <= d <= w.end]
     return [d for d, _ in pairs], [v for _, v in pairs]
+
+
+def _window_drawdown(r: BacktestResult, w: CrisisWindow) -> tuple[float, date]:
+    """Worst fall to a trough inside ``w`` from the running peak of the full series."""
+    peak_level, peak_day = r.index[0], r.dates[0]
+    worst, worst_peak = 0.0, peak_day
+    for d, v in zip(r.dates, r.index, strict=True):
+        if v > peak_level:
+            peak_level, peak_day = v, d
+        if w.start <= d <= w.end and v / peak_level - 1.0 < worst:
+            worst, worst_peak = v / peak_level - 1.0, peak_day
+    return worst, worst_peak
 
 
 def crisis_summary(
@@ -50,7 +67,7 @@ def crisis_summary(
     """One summary per window; None when any of the three runs has fewer than two points in it."""
     out: dict[str, ScenarioSummary | None] = {}
     for w in windows:
-        (sd, si), (bd, bi), (fd, fi) = (
+        (sd, si), (bd, bi), (fd, _) = (
             _slice(strategy_result, w),
             _slice(buy_and_hold_result, w),
             _slice(floor_only_result, w),
@@ -58,11 +75,14 @@ def crisis_summary(
         if min(len(sd), len(bd), len(fd)) < 2:
             out[w.name] = None
             continue
+        achieved, peak_date = _window_drawdown(strategy_result, w)
         out[w.name] = ScenarioSummary(
-            achieved_max_drawdown=max_drawdown(sd, si).depth,
-            buy_and_hold_max_drawdown=max_drawdown(bd, bi).depth,
-            floor_only_max_drawdown=max_drawdown(fd, fi).depth,
+            achieved_max_drawdown=achieved,
+            buy_and_hold_max_drawdown=_window_drawdown(buy_and_hold_result, w)[0],
+            floor_only_max_drawdown=_window_drawdown(floor_only_result, w)[0],
             return_lag=(bi[-1] / bi[0] - 1.0) - (si[-1] / si[0] - 1.0),
+            peak_date=peak_date,
+            window_start_to_end=max_drawdown(sd, si).depth,
         )
     return out
 

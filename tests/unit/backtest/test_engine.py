@@ -169,3 +169,35 @@ def test_sma_months_method_runs():
     dates = weekdays(date(2024, 1, 1), 70)
     res = run([100.0] * 70, [100.0] * 70, dates, signals=sig)
     assert res.values[-1] == pytest.approx(100000)
+
+
+def test_monthly_cadence_measures_the_cooldown_in_calendar_weeks():
+    dates = weekdays(date(2023, 12, 11), 80)
+    pos = {d: i for i, d in enumerate(dates)}
+    # trend votes on the close before each monthly decision: down, up, down
+    changes = {
+        pos[date(2024, 1, 2)]: 90.0,
+        pos[date(2024, 2, 5)]: 90.0,
+        pos[date(2024, 2, 6)]: 95.0,
+        pos[date(2024, 3, 4)]: 95.0,
+        pos[date(2024, 3, 5)]: 90.0,
+    }
+    eq = flat_then(80, changes)
+    res = run(eq, [100.0] * 80, dates, cadence="monthly", ladder=two_step_ladder(cooldown_weeks=2))
+    assert [(d, x.kind) for d, x in res.decisions[1:4]] == [
+        (date(2024, 1, 3), "derisk"),
+        (date(2024, 2, 7), "reentry"),
+        (date(2024, 3, 6), "derisk"),  # four weeks later: the two-week cooldown has long passed
+    ]
+
+
+def test_spread_is_charged_once_per_leg_on_a_known_rebalance():
+    from guard.backtest.engine import Sleeve, _rebalance
+
+    # 100000 at 80% equity moved to 60%: sell 20000 of equity, buy 20000 of safe = 40000 traded.
+    # At 0.1% per unit of traded value the cost is 40000 * 0.001 = 40, not 20 and not 80.
+    after, traded = _rebalance(Sleeve("s", True, 80000.0, 20000.0), 0.6, 0.001)
+    assert traded == pytest.approx(40000.0)
+    assert after.value == pytest.approx(99960.0)
+    assert after.equity == pytest.approx(0.6 * 99960.0)
+    assert after.safe == pytest.approx(0.4 * 99960.0)

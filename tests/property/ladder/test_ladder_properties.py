@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -35,3 +36,36 @@ def test_floor_weekly_cap_and_determinism_hold_for_any_signal_sequence(
         assert abs(new.equity - state.equity) <= c.max_weekly_change + 1e-9
         assert (new, decision) == advance(state, s, i, c)
         state = new
+
+
+def _run(prefix: list[tuple[bool, bool, bool, float | None, bool]], tail: Signals, n: int):  # type: ignore[no-untyped-def]
+    c = cfg()
+    state = initial_state(c)
+    week = 0
+    for w in prefix:
+        week += 1
+        state, _ = advance(state, _sig(*w), week, c)
+    for _ in range(n):
+        week += 1
+        state, _ = advance(state, tail, week, c)
+    return c, state
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.lists(_week, max_size=60))
+def test_six_all_negative_weeks_end_at_the_floor_whatever_came_before(
+    prefix: list[tuple[bool, bool, bool, float | None, bool]],
+) -> None:
+    neg = SignalResult(-0.2, True)
+    c, state = _run(prefix, Signals(neg, neg, neg, None), 6)
+    assert state.equity == pytest.approx(max(c.steps[-1].equity, c.equity_floor))
+
+
+@settings(max_examples=300, deadline=None)
+@given(st.lists(_week, max_size=60))
+def test_eight_all_clear_weeks_end_at_the_top_step(
+    prefix: list[tuple[bool, bool, bool, float | None, bool]],
+) -> None:
+    ok = SignalResult(0.1, False)
+    c, state = _run(prefix, Signals(ok, ok, ok, None), 8)
+    assert state.equity == pytest.approx(c.steps[0].equity)

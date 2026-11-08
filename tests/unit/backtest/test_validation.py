@@ -188,7 +188,7 @@ def test_walk_forward_logs_its_training_trials(tmp_path, data_dir):
     res = walk_forward(
         eq, sf, WF_GRID, cfg, settings=load_settings().walk_forward, data_version="d", trial_log=log
     )
-    assert log.count == (4 + 1) * len(res.folds)  # each fold: 4 training trials and its test run
+    assert log.count == (4 + 2) * len(res.folds)  # per fold: 4 training, its test, defaults' test
 
 
 def test_weekday_ranges_and_wednesday_verdict_on_constructed_results():
@@ -214,9 +214,8 @@ def test_weekday_ranges_and_wednesday_verdict_on_constructed_results():
     assert not v2.wednesday_stays and v2.beaten_by == [3]
     assert "Thursday" in v2.text
 
-    slightly = runs(
-        3, [0.60, 0.62]
-    )  # median 0.61 beats 0.53 by 0.08, inside Wednesday's 0.10 spread
+    # paired differences against Wednesday are +0.02 and +0.12: median 0.07 is inside their 0.10 spread
+    slightly = runs(3, [0.50, 0.70])
     v3 = wednesday_verdict(WeekdayOffsetResult.from_runs(slightly + wed), "calmar")
     assert v3.wednesday_stays
 
@@ -244,3 +243,182 @@ def test_weekday_offsets_runs_every_weekday_and_offset_and_logs_them(tmp_path, d
     assert len(res.runs) == 10
     assert log.count == 10
     assert set(res.per_weekday) == {0, 1, 2, 3, 4}
+
+
+# ---------------------------------------------------------------- review fixes
+
+
+def _flat(x, y, calmar, dd, lag):
+    return trial(x, y, calmar, dd, lag)
+
+
+def target_surface():
+    """Four columns of flat, deep-drawdown cells (the bigger plateau) beside one column that meets
+    the drawdown target (the smaller one)."""
+    xs = [1, 2, 3, 4, 5]
+    ys = [1, 2, 3, 4, 5]
+    out = []
+    for x in xs:
+        for y in ys:
+            if x < 5:
+                out.append(_flat(x, y, 0.9, -0.40, 0.5))
+            else:
+                out.append(_flat(x, y, 0.5, -0.10, 0.5))
+    return out
+
+
+def test_plateau_cells_must_meet_the_targets_before_size_counts():
+    s = load_settings().plateau
+    kw = {"tolerance": s.tolerance, "floors": s.floors}
+    plain = propose_plateau_centre(target_surface(), "trend_window", "drawdown_threshold", **kw)
+    assert plain.size == 20  # the flat poor region is bigger
+    p = propose_plateau_centre(
+        target_surface(),
+        "trend_window",
+        "drawdown_threshold",
+        max_drawdown_limit=-0.15,
+        lag_limit=1.0,
+        **kw,
+    )
+    assert p.meets_targets and p.size == 5 and p.x == 5
+    none = propose_plateau_centre(
+        target_surface(),
+        "trend_window",
+        "drawdown_threshold",
+        max_drawdown_limit=-0.05,
+        lag_limit=1.0,
+        **kw,
+    )
+    assert not none.meets_targets and none.size == 20
+
+
+def test_joint_plateau_score_varies_every_chosen_axis_around_the_centre():
+    from guard.backtest.validation import joint_plateau_score
+
+    ts = []
+    for a in (1, 2, 3):
+        for b in (1, 2, 3):
+            for c in (1, 2, 3):
+                bad = (a, b, c) == (3, 3, 3)
+                ts.append(
+                    TrialResult(
+                        {"trend_window": a, "drawdown_threshold": b, "confirmation_runs": c},
+                        {"max_drawdown": -0.8 if bad else -0.2, "worst_lag": 0.5, "calmar": 0.5},
+                        f"{a}{b}{c}",
+                    )
+                )
+    s = load_settings().plateau
+    axes = ["trend_window", "drawdown_threshold", "confirmation_runs"]
+    mid = joint_plateau_score(
+        ts,
+        axes,
+        {"trend_window": 2, "drawdown_threshold": 2, "confirmation_runs": 2},
+        s.tolerance,
+        s.floors,
+    )
+    corner = joint_plateau_score(
+        ts,
+        axes,
+        {"trend_window": 1, "drawdown_threshold": 1, "confirmation_runs": 1},
+        s.tolerance,
+        s.floors,
+    )
+    assert mid == pytest.approx(25 / 26) and corner == 1.0
+    missing = joint_plateau_score(
+        ts,
+        axes,
+        {"trend_window": 9, "drawdown_threshold": 1, "confirmation_runs": 1},
+        s.tolerance,
+        s.floors,
+    )
+    assert missing is None
+
+
+def test_short_history_raises_insufficient_history_and_other_errors_propagate(data_dir):
+    from guard.backtest.validation import InsufficientHistory
+
+    cfg = load_config()[0]
+    eq, sf = world(n=900)
+    s = load_settings().walk_forward
+    with pytest.raises(InsufficientHistory):
+        walk_forward(eq, sf, WF_GRID, cfg, settings=s, data_version="d")
+    assert issubclass(InsufficientHistory, ValueError)
+    eq, sf = world(n=3300)
+    with pytest.raises(ValueError, match="unknown parameter") as e:
+        walk_forward(eq, sf, {"bogus": [1]}, cfg, settings=s, data_version="d")
+    assert not isinstance(e.value, InsufficientHistory)
+
+
+def test_all_training_scores_missing_falls_back_to_the_default_anchor():
+    chosen, score = choose_parameters(
+        [({"a": 3, "b": 3}, None), ({"a": 2, "b": 2}, None)], {"a": 1, "b": 1}, 0.0
+    )
+    assert chosen == {"a": 1, "b": 1} and score is None
+
+
+def test_walk_forward_flags_folds_without_a_valid_training_score(monkeypatch, data_dir):
+    from guard.backtest import validation as v
+
+    real = v.run_trial
+
+    def no_calmar(*a, **k):
+        t, r = real(*a, **k)
+        return TrialResult(t.params, {**t.metrics, "calmar": None}, t.manifest_hash), r
+
+    monkeypatch.setattr(v, "run_trial", no_calmar)
+    cfg = load_config()[0]
+    eq, sf = world(n=3300)
+    res = walk_forward(
+        eq, sf, WF_GRID, cfg, settings=load_settings().walk_forward, data_version="d"
+    )
+    anchor = v.default_params(cfg)
+    for f in res.folds:
+        assert f.no_valid_training_score and f.train_score is None
+        assert f.params["trend_window"] == anchor["trend_window"]
+        assert f.params["drawdown_threshold"] == anchor["drawdown_threshold"]
+        assert f.test_return == pytest.approx(f.default_test_return)
+
+
+def test_each_fold_records_its_test_return_and_the_defaults_test_return(data_dir):
+    cfg = load_config()[0]
+    eq, sf = world(n=3300)
+    res = walk_forward(
+        eq, sf, WF_GRID, cfg, settings=load_settings().walk_forward, data_version="d"
+    )
+    for f in res.folds:
+        assert isinstance(f.test_return, float) and isinstance(f.default_test_return, float)
+        assert not f.no_valid_training_score
+
+
+def paired(day, values):
+    return [(day, k, {"calmar": v, "max_drawdown": -0.2}) for k, v in enumerate(values)]
+
+
+def test_wednesday_verdict_uses_paired_differences_at_the_same_offset():
+    # Wednesday swings with the start offset; Thursday is always 0.10 better at the same offset.
+    wed = paired(2, [0.20, 0.90, 0.50, 0.30])
+    thu = paired(3, [0.30, 1.00, 0.60, 0.40])
+    res = WeekdayOffsetResult.from_runs(wed + thu)
+    v = wednesday_verdict(res, "calmar")
+    assert v.determined and not v.wednesday_stays and v.beaten_by == [3]
+    assert v.offsets_used == 4
+    assert "4 start offsets" in v.text
+
+
+def test_wednesday_stays_when_paired_differences_are_noisy():
+    wed = paired(2, [0.50, 0.50, 0.50, 0.50])
+    thu = paired(3, [0.90, 0.10, 0.80, 0.20])  # median diff positive but swings widely
+    v = wednesday_verdict(WeekdayOffsetResult.from_runs(wed + thu), "calmar")
+    assert v.determined and v.wednesday_stays
+
+
+def test_wednesday_verdict_is_undetermined_without_wednesday_data():
+    res = WeekdayOffsetResult.from_runs(paired(3, [0.5, 0.6]) + paired(4, [0.5, 0.6]))
+    v = wednesday_verdict(res, "calmar")
+    assert not v.determined and not v.wednesday_stays
+    assert "undetermined" in v.text.lower() and "stays" not in v.text.lower()
+
+
+def test_wednesday_verdict_is_undetermined_with_a_single_offset():
+    res = WeekdayOffsetResult.from_runs(paired(2, [0.5]) + paired(3, [0.9]))
+    assert not wednesday_verdict(res, "calmar").determined

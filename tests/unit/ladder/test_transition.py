@@ -182,3 +182,50 @@ def test_golden_twenty_week_sequence() -> None:
         steps.append(state.step)
     assert equity == pytest.approx(g["equity"])
     assert steps == g["step"]
+
+
+def test_a_pending_capped_reduction_survives_a_week_where_the_target_changed() -> None:
+    c = cfg()
+    crash = sig(True, True, True, ret=-0.12)
+    two = sig(trend=True, dd=True)
+    allneg = sig(True, True, True)
+    states = run(
+        initial_state(c),
+        [(1, crash), (2, two), (3, allneg), (4, allneg), (5, allneg), (6, allneg)],
+        c,
+    )
+    assert [round(s.equity, 6) for s in states] == [0.75, 0.75, 0.60, 0.50, 0.50, 0.50]
+    assert states[0].step == 3 and states[0].pending_equity == pytest.approx(0.50)
+
+
+def test_equity_above_the_step_weight_is_brought_down_even_without_a_pending_remainder() -> None:
+    c = cfg()
+    start = LadderState(equity=0.75, step=3)
+    s, d = advance(start, sig(True, True, True), 5, c)
+    assert d.kind == "continue" and s.equity == pytest.approx(0.60)
+    s, d = advance(s, sig(True, True, True), 6, c)
+    assert s.equity == pytest.approx(0.50)
+
+
+def test_equity_left_below_the_step_weight_by_a_cancelled_reentry_is_reconciled() -> None:
+    c = cfg()
+    start = LadderState(equity=0.60, step=2)
+    s1, _ = advance(start, sig(), 10, c)  # re-entry to step 0, first tranche
+    s2, _ = advance(s1, sig(), 11, c)
+    assert s2.equity == pytest.approx(0.75) and s2.reentry_dest is not None
+    s3, d3 = advance(s2, sig(trend=True), 12, c)  # trend turns: cancelled, held at 0.75
+    assert s3.reentry_dest is None and s3.equity == pytest.approx(0.75) and s3.step == 0
+    s4, d4 = advance(s3, sig(), 13, c)  # all clear and target == step: back to the step weight
+    assert s4.equity == pytest.approx(0.90) and d4.kind == "reentry"
+    s5, d5 = advance(s4, sig(), 14, c)
+    assert s5 == s4 or s5.equity == pytest.approx(0.90)
+    assert d5.kind == "hold"
+
+
+def test_a_cancelled_reentry_close_to_the_next_step_does_not_strand_the_ladder() -> None:
+    c = cfg()
+    # step 2 (0.60 weight) but a cancelled re-entry left equity at 0.525; all signals now negative
+    start = LadderState(equity=0.525, step=2, last_change_week=7)
+    allneg = sig(True, True, True)
+    states = run(start, [(8, allneg), (9, allneg)], c)
+    assert states[-1].step == 3 and states[-1].equity == pytest.approx(0.50)
