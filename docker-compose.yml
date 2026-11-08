@@ -1,0 +1,54 @@
+# Unverified: written without running Docker. See ops/deploy.md.
+# The dashboard binds 0.0.0.0 INSIDE its container only because Docker cannot forward to a container
+# loopback; the host side is published to 127.0.0.1 only (a unit test enforces this).
+# Secrets arrive at runtime through .env (chmod 600, never in git, never in the image).
+x-guard: &guard
+  build: .
+  env_file: .env
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp"]
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  volumes: ["guard-data:/data"]
+  environment:
+    GUARD_DATA_DIR: /data
+    TZ: Europe/London
+    HOME: /tmp
+
+services:
+  worker:
+    <<: *guard
+    command: ["python", "-m", "guard.worker"]
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 200
+    healthcheck:
+      test: ["CMD", "python", "-m", "guard.worker", "status"]
+      interval: 5m
+      timeout: 30s
+      retries: 2
+      start_period: 1m
+  dashboard:
+    <<: *guard
+    command:
+      - streamlit
+      - run
+      - src/guard/ui/app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+      - --browser.gatherUsageStats=false
+    ports: ["127.0.0.1:8501:8501"]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 200
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=5)"]
+      interval: 1m
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  guard-data:
