@@ -1,3 +1,28 @@
+# Trading212 payload shapes: checked against the published spec and real accounts
+
+**Status (2026-11-08).** Checked two ways: the published OpenAPI spec (`https://docs.trading212.com/_bundle/api.json`)
+and a read-only run against a real Invest and a real Stocks ISA account (field names, types, currency codes and
+reconciliation only; no amounts were recorded).
+
+Confirmed:
+- All paths, Basic auth, and the position, summary and instrument field names below.
+- Positions and instruments are plain lists; history endpoints return `{items, nextPagePath}`.
+- London ETFs are reported with instrument currency exactly `GBX`; `quantity * currentPrice` is 100 times
+  `walletImpact.currentValue` for them, so prices are in pence. USD holdings carry the GBP value in
+  `walletImpact.currentValue`.
+- Order history items are `{order: {...}, fill: {...}}`; the id is `order.id` (not top level). Dividends and
+  transactions use `reference`.
+- Positions plus cash reconcile with `totalValue` for both accounts.
+- The fixed satellite (BRK.B) is recognised by the normalised symbol match.
+
+Still open:
+- Both accounts had zero cash when checked, so it is not yet shown whether `totalValue` includes cash. The
+  reconciliation sums all cash buckets; recheck with an account that holds cash.
+- The positions request sends `limit=50`, which the spec does not list for that endpoint (it was accepted).
+- The spec documents the instruments endpoint at one request per 50 seconds; a run now fetches it once for all accounts.
+
+---
+
 # Trading212 payload field names assumed by ingestion
 
 The Trading212 docs list endpoint groups but not full response schemas, so the field names below

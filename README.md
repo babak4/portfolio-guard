@@ -62,11 +62,22 @@ cannot silently fall back to a default. Each load is hashed and archived so a pa
 
 ### Secrets
 
-Secrets are read through sops (`$GUARD_DATA_DIR/secrets.enc.yaml`, or the file named by `GUARD_SECRETS_FILE`).
-They are never logged or committed. Names used so far:
+Secrets are never logged or committed. Guard looks each one up as an upper-cased name, for example
+`guard_t212_key_gia` is `GUARD_T212_KEY_GIA`, in this order: the real environment, then a `.env` file, then
+an optional sops-encrypted file.
 
-- `guard_t212_key_<account_id>` and `guard_t212_secret_<account_id>`: a **read-only** Trading212 API key for each account.
-  Restrict the key to the host's IP where you can.
+```bash
+cp .env.example .env     # .env is git-ignored
+chmod 600 .env           # Guard refuses a .env that other users can read
+# then fill in the values
+```
+
+The `.env` file is read from `GUARD_ENV_FILE` if set, otherwise from the repo root, otherwise from `$GUARD_DATA_DIR`.
+Names used so far:
+
+- `GUARD_T212_KEY_<ACCOUNT>` and `GUARD_T212_SECRET_<ACCOUNT>` for each account in the config (`GIA`, `ISA`): a
+  **read-only** Trading212 API key (tick only account data, portfolio and history; no orders). Restrict the key to the
+  host's IP where you can.
 
 ### Optional inputs
 
@@ -121,7 +132,7 @@ The same checks run on every pull request in GitHub Actions (`.github/workflows/
 - Tests never touch the network (`pytest-socket` blocks it).
 - Integration tests are marked `live` and skipped by default. Run **one directory per invocation**:
   `uv run pytest tests/integration/market -m live --force-enable-socket`. The Trading212 demo test also needs
-  a demo read-only key set up as the secrets `guard_t212_key_demo` and `guard_t212_secret_demo`, and its
+  a demo read-only key set as `GUARD_T212_KEY_DEMO` and `GUARD_T212_SECRET_DEMO` in `.env`, and its
   skip marker removed.
 - Golden tests have expected values worked out independently of the code; do not edit them to make code pass.
 

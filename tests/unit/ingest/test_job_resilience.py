@@ -126,3 +126,28 @@ def test_scheduled_job_tolerates_a_late_start(data_dir: Path) -> None:
     assert job.coalesce is True
     assert job.max_instances == 1
     assert job.misfire_grace_time == 90 * 60  # 22:30 to the end of the local day
+
+
+def test_instruments_are_fetched_once_for_all_accounts(make_client, data_dir) -> None:
+    cfg = load_config()[0]
+    from datetime import UTC, datetime
+
+    from guard.ingest.snapshot_job import _collect
+
+    requested: list[str] = []
+    clients = {}
+    for account_id, routes in (("isa", isa_routes()), ("gia", gia_routes())):
+        routes.update(history_routes())
+        client, fake, _ = make_client(routes)
+        clients[account_id] = (client, fake)
+
+    def client_for(account_id: str):
+        return clients[account_id][0]
+
+    now = datetime(2026, 11, 9, 12, tzinfo=UTC)
+    _collect(now, now.date(), cfg, client_for, None)
+    for _client, fake in clients.values():
+        requested.extend(
+            str(r.url) for r in fake.requests if r.url.path.endswith("/equity/metadata/instruments")
+        )
+    assert len(requested) == 1

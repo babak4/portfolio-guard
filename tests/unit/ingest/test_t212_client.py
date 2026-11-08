@@ -98,6 +98,6 @@ def test_path_outside_allowlist_raises(make_client: Make) -> None:
 def test_history_pages_follow_next_page_path_until_null(make_client: Make) -> None:
     client, fake, _ = make_client(history_routes())
     items = client.get_all(f"{API}/equity/history/orders?limit=50")
-    assert [i["id"] for i in items] == [1001, 1002, 1003]
+    assert [i["order"]["id"] for i in items] == [1001, 1002, 1003]
     assert fixture("orders_p2.json")["nextPagePath"] is None
     assert len(fake.requests) == 2

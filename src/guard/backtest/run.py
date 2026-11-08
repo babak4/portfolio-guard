@@ -59,7 +59,7 @@ from guard.market.chains import assemble, load_chains
 from guard.market.history import History, HistoryError, build_history
 from guard.paths import REPO_ROOT, data_dir, subdir
 
-PLATEAU_METRICS = ("calmar", "max_drawdown", "worst_lag")
+PLATEAU_METRICS = ("calmar", "max_drawdown", "median_lag", "worst_lag")
 MSCI_FILE_NAME = "msci_acwi_nr.csv"
 HISTORY_START = date(1999, 1, 1)
 UK_SHORT_RATE_SERIES = "IR3TIB01GBM156N"

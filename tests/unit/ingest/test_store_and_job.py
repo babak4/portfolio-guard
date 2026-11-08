@@ -68,7 +68,7 @@ def test_history_pages_stored_and_refetch_adds_no_duplicates(
         history = fetch_history(client)
         new = {k: store_raw_history(conn, k, "isa", items, fetched) for k, items in history.items()}
     assert new == {"orders": 0, "dividends": 0, "transactions": 0}
-    assert [o["id"] for o in raw_history(conn, "orders", "isa")] == [1001, 1002, 1003]
+    assert [o["order"]["id"] for o in raw_history(conn, "orders", "isa")] == [1001, 1002, 1003]
     assert len(raw_history(conn, "dividends", "isa")) == 2
     assert len(raw_history(conn, "transactions", "isa")) == 2
 

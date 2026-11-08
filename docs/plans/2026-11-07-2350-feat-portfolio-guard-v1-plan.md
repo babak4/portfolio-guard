@@ -96,12 +96,13 @@ Buy-and-hold exposes a long-horizon ETF portfolio to deep drawdowns, and global 
 
 - Phase 3 propose-then-approve execution via the Trading212 API.
 - Automatic ISA transfer tracking from InvestEngine (manual entry until transfer completes).
+- GIA sells only when the sale is estimated not to create a taxable gain (a loss, or a gain within the annual allowance), using the Trading212 average cost per holding. Needs pooled-cost tracking, the 30-day matching rule for re-entry buys, and income on accumulating funds, which the PRD leaves out of scope for v1.
 
 ### Open Questions
 
-**Resolve before U7 (blocking, owner decides after the Phase 0 report)**
-- The -15% cap versus the 50% floor. With 50% equity, a 30-40% equity fall alone costs 15-20%, so the cap may need a lower floor or a looser cap. The backtest gives the numbers (R21); the owner chooses.
-- GIA cannot be sold tactically (R12), so GIA drawdown is cut only by steering new money. Whole-portfolio protection is weaker than the ladder implies. The backtest models this as a variant; the owner should confirm GIA stays sell-free.
+**Settled after the Phase 0 report (see `docs/decisions.md`)**
+- Equity floor stays at 50%; the drawdown cap is -20% (was -15%) and the return-lag limit is 1.5% a year, judged on the typical 3-year window with the worst window and share over the limit always shown.
+- The GIA never sells (R12): its drawdown is cut only by steering new money. This was chosen over allowing GIA sales; selling only when a sale would not create a taxable gain is a later improvement (below).
 
 **Deferred**
 - ISA transfer from InvestEngine: cash or in-specie, and timing, are unconfirmed; ask Trading212 before the transfer, using the official ISA transfer route.

@@ -321,3 +321,11 @@ def test_lag_section_states_its_reference_and_the_rebalanced_comparison(draft):
     lag = section(render_phase0_report(draft[0]), "Rolling 3-year lag")
     assert "never rebalanced" in lag
     assert "rebalanced" in lag and "90/10" in lag
+
+
+def test_lag_verdict_is_judged_on_the_typical_window_and_shows_worst_and_share(draft):
+    md = render_phase0_report(draft[0])
+    summary = md.split("Summary of what the numbers say")[1].split("\n## ")[0]
+    assert "typical (median)" in summary
+    assert "worst" in summary and "of windows lag by more than" in summary
+    assert "judged on the typical window" in summary

@@ -1,9 +1,17 @@
 {
   "items": [
     {
-      "id": 1003,
-      "ticker": "CSH2l_EQ",
-      "filledQuantity": 3
+      "order": {
+        "id": 1003,
+        "ticker": "CSH2l_EQ",
+        "side": "BUY",
+        "status": "FILLED"
+      },
+      "fill": {
+        "id": 10030,
+        "quantity": 3,
+        "price": 100.0
+      }
     }
   ],
   "nextPagePath": null

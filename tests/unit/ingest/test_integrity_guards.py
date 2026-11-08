@@ -105,8 +105,9 @@ def test_history_item_without_id_stops_the_run(make_client: Make, kind: str) -> 
     routes = history_routes()
     page = fixture(f"{kind}_p1.json")
     items = page["items"] if isinstance(page, dict) else page
-    items[0].pop("id", None)
     items[0].pop("reference", None)
+    if "order" in items[0]:
+        items[0]["order"].pop("id", None)
     routes[f"{API}/equity/history/{kind}?limit=50"] = page
     client, _, _ = make_client(routes)
     with pytest.raises(IngestIntegrityError, match="without"):

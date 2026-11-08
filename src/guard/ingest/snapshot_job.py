@@ -24,6 +24,7 @@ from guard.ingest.t212 import (
     client_for_account,
     fetch_history,
     fetch_snapshot,
+    load_instruments,
 )
 from guard.paths import data_dir
 from guard.storage import open_ops, writer_lock
@@ -91,9 +92,12 @@ def _collect(
     tolerance = Decimal(str(config.data.crosscheck_tolerance))
     snapshots: list[Snapshot] = []
     history: dict[str, dict[str, RawItems]] = {}
+    instruments = None
     for account in config.portfolio.accounts:
         client = client_for(account.id)
         try:
+            if instruments is None:
+                instruments = load_instruments(client)
             snapshots.append(
                 fetch_snapshot(
                     client,
@@ -102,6 +106,7 @@ def _collect(
                     tolerance=tolerance,
                     taken_at=now,
                     day=day,
+                    instruments=instruments,
                 )
             )
             history[account.id] = fetch_history(client)

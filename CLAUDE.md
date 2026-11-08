@@ -20,7 +20,7 @@ A change is done when pytest, ruff and mypy are all clean.
 
 - No live network in tests (pytest-socket is on). Real-service checks use the `live` marker and are manual.
 - Golden tests are authored independently and never edited to make code pass.
-- Secrets only through `guard.secrets.get_secret`; never logged, printed or committed. Tests use `GUARD_FAKE_SECRETS`.
+- Secrets only through `guard.secrets.get_secret` (environment, then a git-ignored `.env` that must be `chmod 600`, then sops); never logged, printed or committed. Tests use `GUARD_FAKE_SECRETS`. Only `.env.example` (empty values) is tracked.
 - The data directory (`GUARD_DATA_DIR`) must be outside the repo. Real data and the MSCI file are never committed.
 - Only `guard.storage` imports `duckdb` or `sqlite3`. One writer at a time (`guard.storage.lock`).
 - Signals, ladder, rebalancing and guardrails are pure functions; I/O lives at the edges.

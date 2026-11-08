@@ -341,13 +341,14 @@ def _summary(inputs: ReportInputs) -> str:
         )
     else:
         lo, med, hi, worse = stats
-        lag_ok = hi <= t.annual_lag_pct
+        lag_ok = med <= t.annual_lag_pct
         lines.append(
             f"Rolling {t.lag_window_years}-year lag against buy-and-hold (the starting mix, never "
-            f"rebalanced): worst {hi:.2f}% a year, "
-            f"median {med:.2f}%, best {lo:.2f}%; {worse:.0%} of windows lag by more than "
-            f"{t.annual_lag_pct:g}% a year. The lag target is "
-            f"{'met' if lag_ok else 'not met'}."
+            f"rebalanced): typical (median) {med:.2f}% a year, worst {hi:.2f}%, best {lo:.2f}%; "
+            f"{worse:.0%} of windows lag by more than {t.annual_lag_pct:g}% a year. The lag "
+            f"target is judged on the typical window and is {'met' if lag_ok else 'not met'}; "
+            "the worst window and the share over the limit are shown so the cost in strong "
+            "rallies is not hidden."
         )
     if tested and stats is not None:
         both = drawdown_ok and lag_ok
@@ -653,7 +654,8 @@ def _plateau_section(inputs: ReportInputs) -> str:
     t = inputs.settings.targets
     parts = [
         f"A plateau counts only where cells meet both targets: max drawdown no worse than "
-        f"-{t.crisis_max_drawdown:.0%} and worst lag no more than {t.annual_lag_pct:g}% a year. "
+        f"-{t.crisis_max_drawdown:.0%} and typical (median) lag no more than "
+        f"{t.annual_lag_pct:g}% a year. "
         f"Everything chosen here is {IN_SAMPLE}: it was picked on the same history it is shown "
         "on, so it flatters the strategy. Only the walk-forward section is out of sample."
     ]
@@ -661,7 +663,7 @@ def _plateau_section(inputs: ReportInputs) -> str:
         parts.append(f"### {ps.x_key} by {ps.y_key}")
         for metric, tbl in ps.tables.items():
             fmt = pct if metric in ("max_drawdown", "cagr") else num
-            unit = " (percent a year)" if metric == "worst_lag" else ""
+            unit = " (percent a year)" if metric in ("median_lag", "worst_lag") else ""
             rows = [
                 [str(y)] + [fmt(v) for v in row] for y, row in zip(tbl.ys, tbl.values, strict=True)
             ]
