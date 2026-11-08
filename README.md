@@ -30,7 +30,7 @@ The project is delivered in four pull-request groups:
 | Group | Contents | State |
 |---|---|---|
 | PR1 | Scaffold, config, storage, market data layer, Trading212 ingestion, long GBP history builder | built |
-| PR2 | Signals, ladder, backtest harness and the Phase 0 report | in progress |
+| PR2 | Signals, ladder, backtest harness and the Phase 0 report | built; the report needs your MSCI file to run on real data |
 | PR3 | Advice engine: rebalancing, contribution steering, constraints, guardrails, run orchestration, audit log | not started |
 | PR4 | Reports, alerts, dashboard, deployment, paper trading | not started |
 
@@ -89,6 +89,21 @@ It fires once a day at the configured time. `GUARD_T212_BASE_URL` selects the ho
 The Trading212 API is in beta and its response field names are assumptions until checked against the demo host;
 see [docs/queries/t212-payload-shapes.md](docs/queries/t212-payload-shapes.md).
 
+### Backtest and the Phase 0 report
+
+```bash
+uv run python -m guard.backtest.run --quick      # small grid, a few minutes
+uv run python -m guard.backtest.run              # full grid
+```
+
+It builds the GBP global-equity history, replays the weekly ladder, runs the benchmarks, a parameter sweep,
+walk-forward validation and a weekday check, and writes `docs/backtests/phase0-report.md`, a trial log and a
+manifest under `$GUARD_DATA_DIR/backtests/`. The report's headline says whether the PRD targets (drawdown about -15%
+in 2008, 2020 and 2022; lag at most 1% a year over rolling 3-year windows) were met, and what decisions it needs from you.
+
+It needs the MSCI ACWI net total return file (see Optional inputs). Without it the command stops and says so; it never
+invents data. Anything built from stand-in series is marked "Draft: proxy data".
+
 ## Testing
 
 ```bash
@@ -114,6 +129,9 @@ src/guard/
   storage/     SQLite and DuckDB access, migrations, single-writer lock
   market/      data adapters, cross-checks, sanity stops, long GBP history builder
   ingest/      Trading212 client, manual holdings, daily snapshot job
+  signals/     trend, drawdown and volatility signals (pure)
+  ladder/      the weekly equity/safe-asset state machine (pure)
+  backtest/    simulator, metrics, benchmarks, sweeps, validation, Phase 0 report
 tests/         unit, golden, property, integration, fixtures
 docs/          plans, provenance of code copied from portfolio-compass, open queries
 ```

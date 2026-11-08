@@ -19,7 +19,9 @@ from guard.market.providers._http import default_client, get_bytes, to_decimal
 
 SOURCE_ID = "fred"
 BASE_URL = "https://fred.stlouisfed.org/graph/fredgraph.csv"
-SERIES = frozenset({"DEXUSUK", "VIXCLS"})
+# IR3TIB01GBM156N is the UK 3-month interbank rate (monthly, percent a year): the money-market
+# stand-in for the years before the ETF existed.
+SERIES = frozenset({"DEXUSUK", "VIXCLS", "IR3TIB01GBM156N"})
 
 
 def parse_fredgraph_csv(content: bytes, series_id: str) -> list[Observation]:
