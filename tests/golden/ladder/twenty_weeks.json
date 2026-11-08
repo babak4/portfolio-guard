@@ -1,0 +1,169 @@
+{
+ "note": "hand-worked with the PRD defaults: confirmation 2, cooldown 2, cap 0.15, min shift 0.05, 4 tranches",
+ "weeks": [
+  {
+   "trend_neg": 1,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 1,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 1,
+   "dd_neg": 1,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 1,
+   "dd_neg": 1,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 1,
+   "dd_neg": 1,
+   "vol_neg": 1,
+   "ret": null
+  },
+  {
+   "trend_neg": 1,
+   "dd_neg": 1,
+   "vol_neg": 1,
+   "ret": null
+  },
+  {
+   "trend_neg": 1,
+   "dd_neg": 1,
+   "vol_neg": 1,
+   "ret": null
+  },
+  {
+   "trend_neg": 1,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  },
+  {
+   "trend_neg": 0,
+   "dd_neg": 0,
+   "vol_neg": 0,
+   "ret": null
+  }
+ ],
+ "equity": [
+  0.9,
+  0.75,
+  0.75,
+  0.6,
+  0.6,
+  0.5,
+  0.5,
+  0.5,
+  0.6,
+  0.7,
+  0.8,
+  0.9,
+  0.9,
+  0.9,
+  0.9,
+  0.9,
+  0.9,
+  0.9,
+  0.9,
+  0.9
+ ],
+ "step": [
+  0,
+  1,
+  1,
+  2,
+  2,
+  3,
+  3,
+  3,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+ ]
+}
