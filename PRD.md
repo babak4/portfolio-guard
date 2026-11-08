@@ -22,7 +22,7 @@ v1 is **advice-only**: it reads portfolio data from the Trading212 API and sends
 **Primary goal (Decided):** cap drawdown first; the 6-8% a year return is an expectation, not a target.
 
 **Success criteria (Decided):**
-- Portfolio drawdown stays within about **-15%** from peak in the 2008, 2020 and 2022 backtest scenarios.
+- Portfolio drawdown stays within about **-20%** from peak in the 2008, 2020 and 2022 backtest scenarios.
 - Return lag versus the buy-and-hold benchmark is no more than **1% a year**, judged over rolling windows of 3+ years.
 - After backtests pass, a **~3-month paper-trading period** (advice only, no reliance) before real use.
 
@@ -77,7 +77,7 @@ v1 is **advice-only**: it reads portfolio data from the Trading212 API and sends
 - **Reference market (Decided):** one global equity index (a proxy for MSCI ACWI or FTSE All-World), converted to GBP.
 - **Signals:**
   1. *Trend:* index price versus a long moving average (candidates: 10-month, 200-day).
-  2. *Drawdown from peak:* distance below the trailing high, tied to the -15% cap.
+  2. *Drawdown from peak:* distance below the trailing high, tied to the -20% cap.
   3. *Volatility spike:* realised volatility or VIX-style measure above a threshold.
 - Parameters are set by backtesting with a **small parameter count** and out-of-sample validation to limit overfitting.
 
@@ -117,7 +117,7 @@ v1 is **advice-only**: it reads portfolio data from the Trading212 API and sends
 - **Extensible:** a registry lets the owner add further portfolios or funds for comparison later.
 
 ### 5.8 Reporting and alerts
-- **Weekly report (Decided contents):** status light (green/amber/red) with the signals that fired and reasons; current ladder step; **exact trades** (ETF, account, amount, including where to direct the monthly GIA contribution); allocation versus target; benchmark comparison and current drawdown versus the -15% cap.
+- **Weekly report (Decided contents):** status light (green/amber/red) with the signals that fired and reasons; current ladder step; **exact trades** (ETF, account, amount, including where to direct the monthly GIA contribution); allocation versus target; benchmark comparison and current drawdown versus the -20% cap.
 - **Channels (Decided):** **phone notification** (e.g. Telegram or push) and a **web dashboard**.
 - **Daily light check (Decided):** a quick daily scan that alerts the phone only on severe moves (defaults: reference index **-5% in a day**, **-8% in a week**, or a volatility spike). It states whether the fast-path applies. It never trades.
 - Push messages should avoid including balances; detail lives in the dashboard.
@@ -135,7 +135,7 @@ v1 is **advice-only**: it reads portfolio data from the Trading212 API and sends
 ## 6. Backtesting and validation
 
 - **History (Decided):** index or longer-lived proxy data, **converted to GBP**, for years before each ETF existed. Proxy periods are clearly marked in results.
-- **Acceptance scenarios (Decided):** hold the -15% cap in **2008, 2020 and 2022**; run paper-trading after.
+- **Acceptance scenarios (Decided):** hold the -20% cap in **2008, 2020 and 2022**; run paper-trading after.
 - **Also test:** weekly versus monthly cadence, all weekdays, confirmation lengths, signal thresholds, and different safe assets.
 - **Costs modelled:** bid-ask spreads and any account costs; Trading212 charges no commission on ETFs in an ISA.
 - **Metrics:** CAGR, max drawdown, time to recover, volatility, Sharpe/Sortino, Calmar, turnover, time spent defensive, and the number of whipsaw round trips.

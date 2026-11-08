@@ -19,7 +19,7 @@ quick_grid:
   mode: [full]
 
 targets:
-  crisis_max_drawdown: 0.15              # PRD: drawdown within about -15% in each crisis
+  crisis_max_drawdown: 0.20              # owner decision (2026-11-08): drawdown within about -20% in each crisis
   annual_lag_pct: 1.0                    # PRD: lag no worse than 1% a year
   lag_window_years: 3                    # over rolling windows of this length
 
