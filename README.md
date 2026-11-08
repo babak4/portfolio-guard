@@ -119,7 +119,7 @@ fall it still alerts, saying so. While paused, a run is recorded as `paused` wit
 shown. `respond` accepts only an `ok` weekly run, ties the response to a hash of the advice stored for it (shown in the
 output) and writes to an append-only journal; a later response supersedes the earlier one without editing it. Advice
 and `ok` runs cannot be edited or deleted. Stopped, failed and locked runs and daily events go to `Deps.notify`
-(a warning log until the alert layer is added); messages that can leave the process have all numbers replaced by `#`.
+(the alert layer; see Alerts); messages that can leave the process have all numbers replaced by `#`.
 `GUARD_T212_BASE_URL` selects the Trading212 host (default `https://live.trading212.com/api/v0`; use
 `https://demo.trading212.com/api/v0` for the demo account). `run-now` exits 2 when a run stopped.
 
@@ -140,6 +140,77 @@ in 2008, 2020 and 2022; lag at most 1% a year over rolling 3-year windows) were 
 
 It needs the MSCI ACWI net total return file (see Optional inputs). Without it the command stops and says so; it never
 invents data. Anything built from stand-in series is marked "Draft: proxy data".
+
+## Alerts
+
+The worker pushes to your phone through Apprise. Telegram is the main channel; ntfy is an optional fallback that is used
+only when Telegram fails. Messages carry the status light, the ladder step in words, fund symbols and the direction of
+each trade, and "details on the dashboard". They never contain balances, money amounts or account names.
+
+What you receive:
+
+- the weekly report after each weekly run (also your heartbeat: if it does not arrive, something is wrong);
+- an alert when a weekly run, the daily check or the snapshot stops, fails or cannot get the lock;
+- a daily message for each market event, saying whether the fast path applies and whether the second source confirmed it;
+- a "weekly advice is missing" alert, sent once, if by 18:00 on the weekly run's day (`schedule.heartbeat_time`) the week
+  has no `ok` or `paused` run.
+
+Set up Telegram:
+
+1. In Telegram, message `@BotFather`, send `/newbot` and follow the prompts. Copy the bot token it gives you.
+2. Open a chat with your new bot and send `/start` (a bot cannot message you until you do).
+3. Find your chat id: open `https://api.telegram.org/bot<TOKEN>/getUpdates` in a browser after sending the bot a
+   message and read `message.chat.id`, or message `@userinfobot`.
+4. Put the values in `.env` (`chmod 600 .env`):
+
+```
+GUARD_TELEGRAM_BOT_TOKEN=123456:ABC...
+GUARD_TELEGRAM_CHAT_ID=123456789
+GUARD_NTFY_TOPIC=            # optional fallback: a hard-to-guess topic name
+GUARD_NTFY_SERVER=           # optional: your own ntfy server, e.g. https://ntfy.example.com (default ntfy.sh)
+```
+
+5. Run `make test-alert`. It sends "Portfolio Guard test: alerts are working" and prints which channel delivered it
+   (never the token). `make status` shows whether alerts are configured and the last delivery per channel.
+
+If the primary channel fails, the fallback is tried; every attempt is stored in the `alert_delivery` table with its error
+(amounts, tokens and URLs removed). With no channel configured the alert is logged as "not configured" and the run is not
+affected. A failure to send an alert never stops a run.
+
+## Dashboard
+
+A private web page for reading the advice and recording what you did. It reads the stores read-only; its
+only writes are the pause switch and your followed/changed/ignored answers, and a write waits (up to 30 s)
+for a running job instead of failing.
+
+```bash
+uv sync --extra dashboard
+export GUARD_DATA_DIR=...                  # outside the repo, as for the worker
+export GUARD_DASHBOARD_INSECURE_LOCAL=1    # local development only, see access below
+make dashboard                             # http://127.0.0.1:8501
+```
+
+Access (checked on every page; the first rule that applies wins):
+
+1. `GUARD_ALLOWED_USERS` (comma-separated logins): the `Tailscale-User-Login` header must be in the list.
+   Use this behind `tailscale serve`, which sets the header; anyone else is refused.
+2. `GUARD_DASHBOARD_PASSWORD`: a sign-in form, compared in constant time.
+3. `GUARD_DASHBOARD_INSECURE_LOCAL=1`: no sign-in, and only while the server listens on loopback.
+4. None of these: the page refuses to render and says what to set.
+
+Pages:
+
+- **Status**: the red/amber/green light (same rule as the alerts), a warning when the weekly run is overdue,
+  the pause switch (pausing asks for a tick first), last successful run of each job, recent alert deliveries.
+- **This week's advice**: trades, the monthly contribution, allocation against target (funds with unverified
+  data are marked), growth and safe fund shares, notes, safety checks including adjusted ones, the ladder
+  decision, the three signals, the close the advice is as of and its reference hash. Any past week can be picked.
+- **Index and signals**: the closes with the 200-day average and the 52-week high, the signals with their
+  trigger levels, and the fall from the high against the -20% line.
+- **Portfolio**: account totals over time (amounts are shown; keep the dashboard private) and the allocation.
+- **History and audit**: every run, its stored record, and a replay that recomputes it from that record.
+- **Respond**: record followed, changed or ignored with a note; a later answer replaces the earlier one,
+  which stays in the journal.
 
 ## Testing
 
@@ -179,3 +250,14 @@ docs/          plans, provenance of code copied from portfolio-compass, open que
 
 Conventions for contributors and agents are in [CLAUDE.md](CLAUDE.md). Code copied from the sibling project
 `portfolio-compass` is listed in [docs/provenance.md](docs/provenance.md).
+
+## Deployment
+
+Guard runs as two containers (`worker` scheduler, `dashboard`) sharing one data volume; secrets arrive
+at runtime from `.env`, and the dashboard is published on `127.0.0.1:8501` only (reach it over Tailscale
+or an SSH tunnel). The compose file and Dockerfile are unverified: Docker has not been run against them yet.
+
+- `ops/deploy.md`: host setup, first run, backups, restore drill, security checklist
+- `docs/runbook.md`: what to do when each alert fires; pause, resume, respond, restore
+- `docs/paper-trading.md`: the three-month paper-trading plan, weekly checklist and incident log
+- `make backup`, `make restore-drill`, `make docker-build`

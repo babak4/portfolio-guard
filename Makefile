@@ -1,4 +1,4 @@
-.PHONY: help setup hooks test lint typecheck check snapshot backtest-quick backtest weekly daily worker pause resume status
+.PHONY: help setup hooks test lint typecheck check snapshot backtest-quick backtest weekly daily worker pause resume status backup restore-drill docker-build dashboard
 
 help:  ## Show available targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
@@ -46,3 +46,18 @@ resume:  ## Allow advice again
 
 status:  ## Pause switch and the last successful run of each job
 	uv run python -m guard.worker status
+
+backup:  ## Snapshot the data directory (needs GUARD_DATA_DIR and GUARD_BACKUP_DIR)
+	uv run python -m guard.storage.backup backup
+
+restore-drill:  ## Restore the latest backup into a temp dir, check it and run status (needs GUARD_BACKUP_DIR)
+	ops/restore_drill.sh
+
+docker-build:  ## Build the image (unverified: Docker was not available when this was written)
+	docker build -t portfolio-guard .
+
+test-alert:  ## Send a test message through the real alert channels (needs the Telegram/ntfy secrets)
+	uv run python -m guard.worker test-alert
+
+dashboard:  ## Run the dashboard on 127.0.0.1:8501 (needs GUARD_DATA_DIR and an access setting, see README)
+	uv run --extra dashboard streamlit run src/guard/ui/app.py --server.address 127.0.0.1 --server.headless true
