@@ -1,0 +1,20 @@
+# Priority chains for the long GBP history, most real series first.
+# `source` names a loader key; `provenance` tags the points the series supplies:
+# etf = the instrument itself, proxy = a stand-in for it, index = the index itself.
+# `fee` is an annual drag deducted from stand-ins so proxy periods are not flattered.
+assets:
+  global_equity:
+    - {source: vwrp_gbp, provenance: etf, currency: GBP, kind: level, fee: 0.0}
+    - {source: vt_usd, provenance: proxy, currency: USD, kind: level, fee: 0.0}
+    - {source: msci_acwi_nr_usd, provenance: proxy, currency: USD, kind: level, fee: 0.0025}
+    - {source: sp500_tr_usd, provenance: proxy, currency: USD, kind: level, fee: 0.0025}
+  us_equity:
+    - {source: vuag_gbp, provenance: etf, currency: GBP, kind: level, fee: 0.0}
+    - {source: sp500_tr_usd, provenance: proxy, currency: USD, kind: level, fee: 0.001}
+  money_market:
+    - {source: csh2_gbp, provenance: etf, currency: GBP, kind: level, fee: 0.0}
+    - {source: sonia_rate_pct, provenance: proxy, currency: GBP, kind: rate_pct, fee: 0.001}
+    - {source: bank_rate_pct, provenance: proxy, currency: GBP, kind: rate_pct, fee: 0.0015}
+  gold:
+    - {source: igln_gbp, provenance: etf, currency: GBP, kind: level, fee: 0.0}
+    - {source: gold_usd, provenance: proxy, currency: USD, kind: level, fee: 0.0012}

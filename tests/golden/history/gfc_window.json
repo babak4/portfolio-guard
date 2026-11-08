@@ -1,0 +1,32 @@
+{
+ "note": "synthetic GFC-window numbers; expected levels computed outside guard with plain arithmetic: usd/fx*exp(-fee*days/365)",
+ "fee": 0.0025,
+ "days": [
+  "2008-09-12",
+  "2008-09-19",
+  "2008-09-26",
+  "2008-10-03",
+  "2008-10-10"
+ ],
+ "msci_usd": [
+  1000.0,
+  1020.0,
+  940.0,
+  900.0,
+  800.0
+ ],
+ "usd_per_gbp": [
+  1.78,
+  1.85,
+  1.8,
+  1.78,
+  1.7
+ ],
+ "expected_gbp": [
+  561.797752809,
+  551.324917331,
+  522.17214852,
+  505.545256885,
+  470.497994149
+ ]
+}
