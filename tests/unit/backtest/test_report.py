@@ -93,7 +93,8 @@ def test_report_states_trial_count_exactly(draft):
 def test_summary_states_the_prd_targets_with_numbers(draft):
     md = render_phase0_report(draft[0])
     summary = md.split("Summary of what the numbers say")[1].split("\n## ")[0]
-    assert "-15%" in summary or "15%" in summary
+    cap = round(draft[0].settings.targets.crisis_max_drawdown * 100)
+    assert f"-{cap}%" in summary
     assert "1%" in summary
     assert ("met" in summary) or ("not met" in summary) or ("Not met" in summary)
     assert "2008" in summary
