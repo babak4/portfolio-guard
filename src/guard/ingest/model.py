@@ -89,6 +89,9 @@ class Snapshot:
     holdings: tuple[Holding, ...]
     cash: Decimal
     total: Decimal
+    # Cash that can be invested now (availableToTrade). ``cash`` sums every bucket so the total
+    # reconciles; advice must spend only this. None means the source cannot tell: use ``cash``.
+    spendable_cash: Decimal | None = None
 
 
 @dataclass(frozen=True)

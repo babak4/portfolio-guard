@@ -111,3 +111,23 @@ def test_isa_and_gia_lines_stay_separate_then_combine(make_client: Make, cfg: Gu
     assert vwrp.value_gbp == Decimal("14000")
     assert vwrp.quantity == Decimal("140")
     assert vwrp.accounts == ("isa", "gia")
+
+
+def test_spendable_cash_is_only_available_to_trade_not_every_bucket(
+    make_client: Make, cfg: GuardConfig
+) -> None:
+    routes = isa_routes()
+    summary = dict(routes[f"{API}/equity/account/summary"])
+    summary["cash"] = {"availableToTrade": 350, "inPies": 100, "reservedForOrders": 50}
+    routes[f"{API}/equity/account/summary"] = summary
+    client, _, _ = make_client(routes)
+    snap = fetch_snapshot(
+        client,
+        next(a for a in cfg.portfolio.accounts if a.id == "isa"),
+        satellites=cfg.portfolio.fixed_satellites,
+        tolerance=Decimal("0.005"),
+        taken_at=datetime(2026, 11, 9, tzinfo=UTC),
+        day=date(2026, 11, 9),
+    )
+    assert snap.cash == Decimal(500)
+    assert snap.spendable_cash == Decimal(350)

@@ -273,7 +273,17 @@ def fetch_snapshot(
         raise IngestIntegrityError(
             f"positions plus cash differ from the account total by {gap} (total {total})"
         )
-    return Snapshot(account.id, account.platform, day, taken_at, holdings, cash, total)
+    spendable = (summary.get("cash") or {}).get("availableToTrade")
+    return Snapshot(
+        account.id,
+        account.platform,
+        day,
+        taken_at,
+        holdings,
+        cash,
+        total,
+        spendable_cash=None if spendable is None else _dec(spendable, "cash.availableToTrade"),
+    )
 
 
 RawItems = list[tuple[str, dict[str, Any]]]
