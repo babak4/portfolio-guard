@@ -42,7 +42,7 @@ the drawdown cap, the signal thresholds and the GIA policy.
 Requires [uv](https://docs.astral.sh/uv/) and Python 3.14 (uv installs it from `.python-version`).
 
 ```bash
-make setup      # uv sync
+make setup      # uv sync --extra dashboard
 ```
 
 Guard keeps real data outside the repository. Point it at a directory of your choice:

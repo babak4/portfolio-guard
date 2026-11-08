@@ -3,8 +3,8 @@
 help:  ## Show available targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-16s %s\n", $$1, $$2}'
 
-setup:  ## Install dependencies
-	uv sync
+setup:  ## Install dependencies (including the dashboard extra)
+	uv sync --extra dashboard
 
 hooks:  ## Install pre-commit and pre-push git hooks
 	uv run pre-commit install
