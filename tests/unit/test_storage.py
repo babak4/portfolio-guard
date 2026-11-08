@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import sqlite3
+import subprocess
+import sys
+import textwrap
+import threading
+from pathlib import Path
+
+import pytest
+
+from guard.storage import open_ops, open_warehouse, writer_lock
+
+
+def _insert_run(conn: sqlite3.Connection, run_id: str = "r1") -> None:
+    conn.execute(
+        "INSERT INTO run (run_id, kind, slot, status, started_at) VALUES (?, 'weekly', ?, 'ok', 't')",
+        (run_id, run_id),
+    )
+
+
+def test_journal_rejects_update_and_delete(data_dir: Path) -> None:
+    conn = open_ops()
+    _insert_run(conn)
+    conn.execute(
+        "INSERT INTO decision_journal (run_id, decision, recorded_at) VALUES ('r1', 'followed', 't')"
+    )
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        conn.execute("UPDATE decision_journal SET decision = 'ignored'")
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        conn.execute("DELETE FROM decision_journal")
+
+
+def test_journal_rejects_unknown_decision(data_dir: Path) -> None:
+    conn = open_ops()
+    _insert_run(conn)
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO decision_journal (run_id, decision, recorded_at) VALUES ('r1', 'maybe', 't')"
+        )
+
+
+def test_run_slot_is_unique_per_kind(data_dir: Path) -> None:
+    conn = open_ops()
+    _insert_run(conn, "a")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO run (run_id, kind, slot, status, started_at) VALUES ('b', 'weekly', 'a', 'ok', 't')"
+        )
+
+
+def test_migrations_apply_once_and_reopen_is_clean(data_dir: Path) -> None:
+    open_ops().close()
+    conn = open_ops()
+    names = [r["name"] for r in conn.execute("SELECT name FROM schema_migrations")]
+    assert names == ["0001_init.sql"]
+    wh = open_warehouse()
+    assert wh.execute("SELECT name FROM schema_migrations").fetchall() == [("0000_baseline.sql",)]
+    wh.close()
+    wh = open_warehouse()
+    assert wh.execute("SELECT count(*) FROM schema_migrations").fetchone() == (1,)
+
+
+def test_second_process_cannot_take_the_writer_lock(data_dir: Path) -> None:
+    code = textwrap.dedent(
+        """
+        import sys
+        from guard.storage import writer_lock
+        with writer_lock("t") as got:
+            print("held" if got else "denied", flush=True)
+            sys.stdin.readline()
+        """
+    )
+    env = {**__import__("os").environ, "GUARD_DATA_DIR": str(data_dir)}
+    holder = subprocess.Popen(
+        [sys.executable, "-c", code],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.readline().strip() == "held"
+        with writer_lock("t") as got:
+            assert got is False
+    finally:
+        assert holder.stdin is not None
+        holder.stdin.write("\n")
+        holder.stdin.flush()
+        holder.wait(timeout=10)
+    with writer_lock("t") as got:
+        assert got is True
+
+
+def test_waiting_writer_succeeds_once_lock_is_released(data_dir: Path) -> None:
+    released = threading.Event()
+    acquired = threading.Event()
+
+    def hold() -> None:
+        with writer_lock("w") as got:
+            assert got
+            acquired.set()
+            released.wait(5)
+
+    t = threading.Thread(target=hold)
+    t.start()
+    assert acquired.wait(5)
+    threading.Timer(0.2, released.set).start()
+    with writer_lock("w", wait_seconds=3) as got:
+        assert got is True
+    t.join()

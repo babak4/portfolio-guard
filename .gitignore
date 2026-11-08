@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+*.egg-info/
+dist/
+# real data and secrets never live in the repo
+data/
+*.enc.yaml
+msci*.csv
+msci*.xlsx

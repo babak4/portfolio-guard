@@ -1,0 +1,63 @@
+# Every parameter with its PRD default. Overrides live in $GUARD_DATA_DIR/config/overrides.yaml.
+# Values marked "provisional" are set by the Phase 0 backtest, not by the PRD.
+schedule:
+  timezone: Europe/London
+  weekly_weekday: wednesday      # tested parameter; the backtest sweeps all weekdays
+  weekly_time: "12:00"
+  daily_check_time: "22:30"
+
+signals:
+  trend_method: sma_days         # candidates: sma_days (200-day), sma_months (10-month)
+  trend_window: 200
+  drawdown_threshold: 0.10       # provisional; fraction below the trailing high
+  drawdown_lookback_weeks: 52
+  volatility_window_days: 20
+  volatility_threshold: 0.25     # provisional; annualised realised volatility
+
+ladder:
+  steps:                         # equity / safe asset; step = number of negative signals
+    - {equity: 0.90, safe: 0.10}
+    - {equity: 0.75, safe: 0.25}
+    - {equity: 0.60, safe: 0.40}
+    - {equity: 0.50, safe: 0.50}
+  confirmation_runs: 2
+  fast_path_weekly_drop: 0.10
+  min_shift: 0.05
+  cooldown_weeks: 2
+  max_weekly_change: 0.15        # PRD proposal; owner to confirm
+  equity_floor: 0.50
+  reentry_tranches: 4
+
+daily_check:
+  day_drop: 0.05
+  week_drop: 0.08
+
+rebalance:
+  drift_band: 0.05               # percentage points as a fraction
+
+constraints:
+  us_exposure_cap: 0.50          # PRD proposal; owner to confirm
+  fee_ceiling: 0.0015            # PRD proposal; owner to confirm
+
+data:
+  jump_threshold: 0.15           # one-day move treated as implausible
+  crosscheck_tolerance: 0.005    # two sources must agree within this fraction
+  stale_trading_days: 2
+  max_gap_days: 10
+
+portfolio:
+  base_currency: GBP
+  gia_monthly_contribution: 1000
+  fixed_satellites: [BRK.B]
+  safe_asset: CSH2               # alternatives: XSTR, short gilts, gold
+  accounts:
+    - {id: isa, kind: isa, platform: trading212}
+    - {id: gia, kind: gia, platform: trading212}
+
+benchmarks:
+  - {id: current_mix, kind: buy_and_hold_current}
+  - {id: static_90_10, kind: static_rebalanced, equity: 0.90}
+  - {id: global_tracker, kind: single_tracker}
+
+alerts:
+  detail: minimal                # minimal = no balances or account names
