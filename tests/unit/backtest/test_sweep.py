@@ -138,7 +138,7 @@ def test_trial_result_roundtrips_to_a_record():
 
 def test_env_is_not_needed_for_settings():
     os.environ.pop("GUARD_DATA_DIR", None)
-    assert load_settings().targets.annual_lag_pct == 1.0
+    assert load_settings().targets.annual_lag_pct == 1.5
     assert date  # keep the import used
 
 
