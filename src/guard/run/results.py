@@ -13,13 +13,19 @@ from guard.storage.run_store import RunRecord
 @dataclass(frozen=True)
 class Notice:
     """Something the owner must hear about, handed to ``Deps.notify``. ``kind`` is ``weekly``,
-    ``daily`` or ``snapshot``; ``status`` is ``stopped``, ``failed``, ``locked`` or ``event``. The
-    message carries no balances and no account names."""
+    ``daily``, ``snapshot`` or ``heartbeat``; ``status`` is ``stopped``, ``failed``, ``locked``,
+    ``event``, ``report`` or ``missing``. The
+    message carries no balances and no account names.
+
+    ``status`` ``report`` is a finished weekly run (the owner's heartbeat). ``result`` and
+    ``event`` carry what the renderers need; they do not take part in equality."""
 
     kind: str
     status: str
     slot: str
     message: str
+    result: RunResult | DailyResult | None = field(default=None, compare=False)
+    event: DailyEvent | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)

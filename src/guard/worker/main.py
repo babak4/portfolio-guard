@@ -11,21 +11,34 @@ import logging
 import sqlite3
 import sys
 from collections.abc import Callable, Sequence
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TextIO
 
 from guard.advice import Advice
+from guard.notify.deliver import (
+    NOT_CONFIGURED,
+    AppriseSender,
+    Sender,
+    channels_from_secrets,
+    deliver,
+)
+from guard.notify.render import render_test
+from guard.readapi.status import status_view
+from guard.report.log_safety import install_filter
 from guard.run.daily import run_daily
 from guard.run.deps import Deps, default_deps
 from guard.run.redact import redact_amounts
 from guard.run.results import DailyResult, RunResult
 from guard.run.weekly import SlotError, run_weekly
 from guard.storage import run_store, writer_lock
+from guard.storage.alert_store import PROBLEM_FAILED_EVERYWHERE, AlertStore
 from guard.worker.schedule import build_scheduler
+from guard.worker.startup import run_startup
 from guard.worker.status import build_status, format_status
 
 LOCK_WAIT_SECONDS = 30.0
+SCHEDULER_STALE = timedelta(minutes=10)
 EXIT_OK, EXIT_FAILED, EXIT_STOPPED, EXIT_LOCKED = 0, 1, 2, 3
 SHORT_HASH = 12
 CONTRIBUTION_LABEL = "monthly contribution (once a month; skip if already made)"
@@ -44,7 +57,19 @@ def _parser() -> argparse.ArgumentParser:
     now.add_argument("--isa-lump-sum", default="0", help="weekly only: ISA money to place, in GBP")
     sub.add_parser("pause", help="stop all advice until resumed")
     sub.add_parser("resume", help="allow advice again")
-    sub.add_parser("status", help="pause switch and the last successful run of each job")
+    status = sub.add_parser("status", help="pause switch and the last successful run of each job")
+    status.add_argument(
+        "--check",
+        action="store_true",
+        help="exit 1 when this week's advice is overdue or the last alert failed on every "
+        "channel (a container healthcheck)",
+    )
+    status.add_argument(
+        "--scheduler",
+        action="store_true",
+        help="with --check: also exit 1 when the scheduler has not ticked in 10 minutes",
+    )
+    sub.add_parser("test-alert", help="send a test message through the real alert channels")
     respond = sub.add_parser("respond", help="record what you did with a piece of advice")
     respond.add_argument("run_id")
     respond.add_argument("decision", choices=list(run_store.DECISIONS))
@@ -104,17 +129,84 @@ def _show_daily(result: DailyResult, out: TextIO) -> int:
     return {"stopped": EXIT_STOPPED, "locked": EXIT_LOCKED}.get(result.status, EXIT_OK)
 
 
+def _alert_status(conn: sqlite3.Connection) -> str:
+    channels = channels_from_secrets()
+    if channels:
+        lines = [f"alerts: configured ({', '.join(c.name for c in channels)})"]
+    else:
+        lines = ["alerts: not configured (see the Alerts section of the README)"]
+    last = {d.channel: d for d in AlertStore(conn).last_per_channel()}
+    for channel in channels:
+        d = last.get(channel.name)
+        if d is None:
+            lines.append(f"alert {channel.name}: never used")
+        else:
+            lines.append(
+                f"alert {channel.name}: {'ok' if d.ok else 'failed'} {d.created_at} ({d.kind})"
+            )
+    return "\n".join(lines)
+
+
+def _test_alert(deps: Deps, now: datetime, out: TextIO, sender: Sender | None) -> int:
+    channels = channels_from_secrets()
+    if not channels:
+        AlertStore(deps.ops).record(
+            kind="test", urgency="info", channel="none", ok=False, error=NOT_CONFIGURED, now=now
+        )
+        print("alerts are not configured; see the Alerts section of the README", file=out)
+        return EXIT_FAILED
+    result = deliver(render_test(), sender or AppriseSender(), channels, AlertStore(deps.ops), now)
+    for attempt in result.attempts:
+        print(f"{attempt.channel}: {'ok' if attempt.ok else 'failed'}", file=out)
+    if result.delivered:
+        print(f"test alert sent through {result.channel}", file=out)
+        return EXIT_OK
+    print("test alert failed on every channel; see the log (no secrets are shown)", file=out)
+    return EXIT_FAILED
+
+
+def _status(deps: Deps, now: datetime, out: TextIO, *, check: bool, scheduler: bool) -> int:
+    view = status_view(deps.ops, deps.config, now)
+    if view.alert_problem:
+        print(
+            f"ALERT PROBLEM: {view.alert_problem}. You may not be told when something is wrong.",
+            file=out,
+        )
+    print(format_status(build_status(deps.ops, now)), file=out)
+    if view.week_paused:
+        print(f"this week's run ({view.expected_weekly_slot}) was recorded as paused", file=out)
+    print(_alert_status(deps.ops), file=out)
+    if not check:
+        return EXIT_OK
+    failed = False
+    if view.weekly_overdue:
+        print(view.warning or "this week's advice is overdue", file=out)
+        failed = True
+    if view.alert_problem == PROBLEM_FAILED_EVERYWHERE:
+        print(f"unhealthy: {view.alert_problem}", file=out)
+        failed = True
+    if scheduler:
+        tick = run_store.scheduler_tick(deps.ops)
+        if tick is None or now - tick > SCHEDULER_STALE:
+            print("unhealthy: the scheduler has not ticked in the last 10 minutes", file=out)
+            failed = True
+    return EXIT_FAILED if failed else EXIT_OK
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
     deps_factory: Callable[[], Deps] = default_deps,
     out: TextIO | None = None,
+    sender: Sender | None = None,
 ) -> int:
     out = out or sys.stdout
+    install_filter()  # every command can send alerts, so every command redacts log output
     args = _parser().parse_args(argv)
     if args.command is None:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         logging.getLogger("httpx").setLevel(logging.WARNING)
+        run_startup(deps_factory)
         build_scheduler(deps_factory).start()
         return EXIT_OK
 
@@ -136,8 +228,9 @@ def main(
                 return _show_weekly(weekly, deps.ops, out)
             return _show_daily(run_daily(deps, now), out)
         if args.command == "status":
-            print(format_status(build_status(deps.ops, now)), file=out)
-            return EXIT_OK
+            return _status(deps, now, out, check=args.check, scheduler=args.scheduler)
+        if args.command == "test-alert":
+            return _test_alert(deps, now, out, sender)
         with writer_lock("run", wait_seconds=LOCK_WAIT_SECONDS) as acquired:
             if not acquired:
                 print("another run is active; try again shortly", file=out)

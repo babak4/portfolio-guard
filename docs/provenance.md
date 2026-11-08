@@ -19,3 +19,8 @@ real service; see `docs/queries/`.
 | `src/compass/market/providers/_http.py` | `src/guard/market/providers/_http.py` | logs only source and status, never URL or parameters |
 | `src/compass/ingest/adapters/t212_api.py` | `src/guard/ingest/t212.py` | only the read-only path allowlist, 429 backoff and `nextPagePath` pagination logic, re-implemented as a standalone client; HTTP Basic auth, injected sleep/clock, no landing store, pyarrow or dbt |
 | `src/compass/market/history.py` (splice rule) | `src/guard/market/history.py` | re-derived, not copied: daily/weekly instead of monthly, rebases at the stitched series start, per-point provenance, USD conversion, rate accrual, fee drag, data-version manifest |
+| `Dockerfile` | `Dockerfile` | python 3.14, `uv sync --locked --extra dashboard`, non-root user, no restic or sops, default command is the worker; unverified (never built) |
+| `docker-compose.yml`, `docker-compose.oci.yml` | `docker-compose.yml` | two services (worker, dashboard) on a named volume with `env_file: .env`, healthchecks, limits and read-only root; the OCI overlay was not carried over; unverified (never run) |
+| `ops/deploy.md`, `ops/oci.md`, `ops/tailscale.md` | `ops/deploy.md` | merged and shortened into one runbook; restic, sops and the Tailscale-header login dropped; marked unverified like the originals |
+| `ops/portscan.sh` | `ops/portscan.sh` | adds a `local` mode that checks only loopback listens; the remote nmap scan kept; unverified |
+| `ops/restore_drill.sh` | `ops/restore_drill.sh` | restic replaced by `guard.storage.backup` (restore latest, verify manifest and integrity, run `status`); unverified |

@@ -145,3 +145,31 @@ def test_a_daily_check_while_paused_says_advice_is_paused(data_dir: Path) -> Non
     cli("pause")
     code, text = cli("run-now", "daily")
     assert code == 0 and "advice is paused" in text
+
+
+def test_status_check_is_healthy_before_any_run_and_after_this_weeks_run(cli: Cli) -> None:
+    assert cli("status", "--check")[0] == 0  # a fresh install is not overdue
+    assert cli("run-now", "weekly")[0] == 0
+    assert cli("status", "--check")[0] == 0
+
+
+def test_status_check_fails_when_this_weeks_advice_is_overdue(data_dir: Path) -> None:
+    done = Cli(now=datetime(2026, 11, 11, 12, 0, 5, tzinfo=UTC))
+    assert done("run-now", "weekly")[0] == 0
+    later = Cli(now=datetime(2026, 11, 18, 20, 0, tzinfo=UTC))  # next Wednesday evening, no run
+    code, text = later("status", "--check")
+    assert code == 1
+    assert "has not completed" in text
+
+
+def test_the_cli_installs_the_log_filter_so_bot_tokens_never_reach_the_logs(
+    cli: Cli, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    cli("status")
+    with caplog.at_level(logging.WARNING):
+        logging.getLogger("apprise").error(
+            "send failed: https://api.telegram.org/bot123456:ABCdef_gh-IJK/sendMessage"
+        )
+    assert "ABCdef_gh-IJK" not in caplog.text

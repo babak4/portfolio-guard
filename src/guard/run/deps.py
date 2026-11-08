@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 import os
 import sqlite3
+import threading
+import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, cast
 
 import duckdb
 
@@ -30,8 +33,54 @@ log = logging.getLogger("guard.run")
 
 
 def log_notice(notice: Notice) -> None:
-    """The default notifier: a warning in the log. The alert layer replaces it."""
+    """The fallback notifier: a warning in the log. ``default_deps`` installs the alert sender."""
     log.warning("%s %s %s: %s", notice.kind, notice.slot, notice.status, notice.message)
+
+
+class LazyWarehouse:
+    """Stands in for the DuckDB connection and opens it on first use.
+
+    Commands that never touch market data (status, pause, a healthcheck) then never take the
+    warehouse's file lock, so they cannot collide with a running job."""
+
+    def __init__(self, opener: Callable[[], Any]) -> None:
+        self._opener = opener
+        self._conn: Any = None
+        self._lock = threading.Lock()
+
+    def __getattr__(self, name: str) -> Any:
+        with self._lock:
+            if self._conn is None:
+                self._conn = self._opener()
+        return getattr(self._conn, name)
+
+    def close(self) -> None:
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+
+
+def open_with_retry(
+    opener: Callable[[], Any],
+    *,
+    attempts: int = 5,
+    sleep: Callable[[float], None] = time.sleep,
+    first_delay: float = 0.5,
+) -> Any:
+    """Open the warehouse, waiting and trying again (0.5 s, 1 s, 2 s, ...) while another process
+    holds its file lock."""
+    delay = first_delay
+    for attempt in range(1, attempts + 1):
+        try:
+            return opener()
+        except duckdb.IOException as e:
+            if attempt == attempts:
+                raise
+            log.warning("warehouse is busy (%s); retrying in %.1fs", type(e).__name__, delay)
+            sleep(delay)
+            delay *= 2
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 @dataclass
@@ -58,11 +107,13 @@ def default_deps() -> Deps:
     """Real providers and Trading212 clients. ``GUARD_T212_BASE_URL`` picks the host."""
     config, version = load_config()
     ops = open_ops()
-    warehouse = open_warehouse()
+    warehouse = cast(
+        duckdb.DuckDBPyConnection, LazyWarehouse(lambda: open_with_retry(open_warehouse))
+    )
     sink = MarketStore(warehouse).raw_sink
     base_url = os.environ.get("GUARD_T212_BASE_URL", LIVE_BASE_URL)
     manual = data_dir() / "manual_holdings.yaml"
-    return Deps(
+    deps = Deps(
         config=config,
         config_version=version,
         ops=ops,
@@ -74,3 +125,7 @@ def default_deps() -> Deps:
         funds=load_registry,
         clock=lambda: datetime.now(UTC),
     )
+    from guard.notify.deliver import make_notifier
+
+    deps.notify = make_notifier(deps)
+    return deps

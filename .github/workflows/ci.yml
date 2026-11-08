@@ -19,7 +19,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install dependencies
-        run: uv sync --locked
+        run: uv sync --locked --extra dashboard
       - name: Ruff
         run: make lint
       - name: Mypy

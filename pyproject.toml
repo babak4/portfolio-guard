@@ -29,6 +29,9 @@ dev = [
 
 [project.optional-dependencies]
 market = ["yfinance>=0.2.50"]
+dashboard = [
+    "streamlit>=1.67.0",
+]
 
 [build-system]
 requires = ["hatchling"]

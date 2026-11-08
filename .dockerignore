@@ -1,0 +1,25 @@
+# Keep secrets, real data and local state out of the build context.
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/id_*
+.git
+.github
+data/
+*.enc.yaml
+msci*.csv
+msci*.xlsx
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+tests/
+docs/
+ops/

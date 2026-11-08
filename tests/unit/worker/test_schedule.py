@@ -9,7 +9,15 @@ from apscheduler.triggers.cron import CronTrigger
 
 from guard.config import load_config
 from guard.run.results import DailyEvent, DailyResult, Notice, RunResult
-from guard.worker.schedule import DAILY_JOB, SNAPSHOT_JOB, WEEKLY_JOB, build_scheduler, guarded
+from guard.worker.schedule import (
+    DAILY_JOB,
+    HEARTBEAT_JOB,
+    SNAPSHOT_JOB,
+    TICK_JOB,
+    WEEKLY_JOB,
+    build_scheduler,
+    guarded,
+)
 from tests.unit.run.fakes import make_deps, market
 
 LONDON = ZoneInfo("Europe/London")
@@ -54,10 +62,10 @@ def test_weekly_job_keeps_local_noon_across_the_spring_clock_change(scheduler) -
     assert [t.utcoffset() for t in times] == [timedelta(0), timedelta(hours=1)]
 
 
-def test_three_jobs_with_misfire_coalesce_and_single_instance(scheduler) -> None:  # type: ignore[no-untyped-def]
+def test_four_jobs_with_misfire_coalesce_and_single_instance(scheduler) -> None:  # type: ignore[no-untyped-def]
     jobs = {j.id: j for j in scheduler.get_jobs()}
-    assert set(jobs) == {WEEKLY_JOB, DAILY_JOB, SNAPSHOT_JOB}
-    for job in jobs.values():
+    assert set(jobs) == {WEEKLY_JOB, DAILY_JOB, SNAPSHOT_JOB, HEARTBEAT_JOB, TICK_JOB}
+    for job in (j for j in jobs.values() if j.id != TICK_JOB):
         assert job.coalesce is True and job.max_instances == 1
         assert job.misfire_grace_time is not None and job.misfire_grace_time >= 3600
     # a late start must still be in the same ISO week; the grace stays within the day
@@ -116,9 +124,24 @@ def test_each_daily_event_is_announced_and_a_quiet_day_is_not(data_dir: Path) ->
     ]
     quiet: list[Notice] = []
     _fire(data_dir, "daily", lambda d, n: DailyResult("ok", "2026-11-10"), quiet)
-    _fire(data_dir, "weekly", lambda d, n: RunResult("ok", "weekly", "2026-11-09"), quiet)
-    _fire(data_dir, "weekly", lambda d, n: RunResult("paused", "weekly", "2026-11-09"), quiet)
     assert quiet == []
+
+
+@pytest.mark.parametrize("status", ["ok", "paused"])
+def test_a_finished_weekly_run_sends_the_report(data_dir: Path, status: str) -> None:
+    got: list[Notice] = []
+    result = RunResult(status, "weekly", "2026-11-09")
+    _fire(data_dir, "weekly", lambda d, n: result, got)
+    assert [(n.kind, n.status, n.slot) for n in got] == [("weekly", "report", "2026-11-09")]
+    assert got[0].result == result
+
+
+def test_the_heartbeat_job_runs_every_evening_london(scheduler) -> None:  # type: ignore[no-untyped-def]
+    job = next(j for j in scheduler.get_jobs() if j.id == HEARTBEAT_JOB)
+    times = _fire_times(job.trigger, datetime(2026, 10, 15, tzinfo=LONDON), 3)
+    assert all((t.hour, t.minute) == (18, 0) for t in times)
+    assert [t.date().isoformat() for t in times] == ["2026-10-15", "2026-10-16", "2026-10-17"]
+    assert job.coalesce is True and job.max_instances == 1
 
 
 def test_a_notifier_that_raises_does_not_stop_the_scheduler(data_dir: Path) -> None:
