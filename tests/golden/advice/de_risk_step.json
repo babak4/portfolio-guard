@@ -1,0 +1,33 @@
+{
+  "note": "Expected values worked out by hand, not by the code. Tactical value T = isa 12000 + gia 10000 = 22000 (BRK.B 3000 is a fixed satellite and is left out); whole portfolio 25000, so the weekly cap is 3750. Ladder moves 0.90 -> 0.80. Growth target 0.80*22000 = 17600, split 0.6/0.4: VWRP 10560, VUAG 7040; safe 0.20*22000 = 4400 in CSH2. Current VWRP 14000, VUAG 5000, CSH2 3000, so deltas are VWRP -3440, VUAG +2040, CSH2 +1400. The GIA cannot sell; the ISA holds 8000 VWRP, so it sells 3440 (under the 3750 cap). Buys equal the deficits: VUAG 2040, CSH2 1400 (the 500 ISA cash stays unspent). After the trades T = 22000, G = 17600. GIA contribution 1000: equity gap = 0.80*(22000+1000) - 17600 = 800, so 800 growth and 200 safe. Growth goal 0.80*23000 = 18400: VWRP 11040 (deficit 480), VUAG 7360 (deficit 320); the 800 fills both exactly. US-only share = (VUAG 5000 + BRK.B 3000)/25000 = 32.0%, under the 50% limit.",
+  "holdings": [
+    {"account": "isa", "symbol": "VWRP", "value": "8000"},
+    {"account": "isa", "symbol": "VUAG", "value": "2000"},
+    {"account": "isa", "symbol": "CSH2", "value": "2000"},
+    {"account": "gia", "symbol": "VWRP", "value": "6000"},
+    {"account": "gia", "symbol": "VUAG", "value": "3000"},
+    {"account": "gia", "symbol": "CSH2", "value": "1000"},
+    {"account": "gia", "symbol": "BRK.B", "value": "3000", "excluded": true}
+  ],
+  "cash": {"isa": "500"},
+  "contributions": {"gia": "1000"},
+  "equity_before": 0.9,
+  "equity_after": 0.8,
+  "growth_targets": {"VWRP": 0.6, "VUAG": 0.4},
+  "expected": {
+    "status": "advice",
+    "trades": [
+      ["isa", "VWRP", "SELL", "3440"],
+      ["isa", "VUAG", "BUY", "2040"],
+      ["isa", "CSH2", "BUY", "1400"]
+    ],
+    "contribution_plan": [
+      ["gia", "VWRP", "480"],
+      ["gia", "VUAG", "320"],
+      ["gia", "CSH2", "200"]
+    ],
+    "tactical_value": "22000",
+    "portfolio_value": "25000",
+    "us_share_text": "32.0%"
+  }
+}
