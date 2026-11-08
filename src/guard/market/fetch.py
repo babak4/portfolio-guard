@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import InvalidOperation
 from typing import Any
 
 from guard.market.base import (
@@ -17,6 +18,15 @@ from guard.market.base import (
 )
 
 log = logging.getLogger("guard.market")
+
+# Canonical series id -> {provider id: the id that provider understands}. USD_PER_GBP is US
+# dollars per one pound: FRED's DEXUSUK and Frankfurter's GBPUSD (base GBP, quote USD) match.
+DEFAULT_MACRO_ALIASES: Mapping[str, Mapping[str, str]] = {
+    "USD_PER_GBP": {"fred": "DEXUSUK", "frankfurter": "GBPUSD"},
+}
+
+# What a parser can raise on a short row, a missing key, a wrong type or a non-UTF-8 body.
+_MALFORMED = (ValueError, TypeError, AttributeError, KeyError, IndexError, InvalidOperation)
 
 
 @dataclass(frozen=True)
@@ -50,6 +60,11 @@ def _fetch(
         except ProviderError as e:
             _record_failure(result, p.provider_id, str(e))
             continue
+        except _MALFORMED as e:
+            _record_failure(
+                result, p.provider_id, f"{p.provider_id}: malformed data ({type(e).__name__})"
+            )
+            continue
         _record(result, p.provider_id, obs)
     return result
 
@@ -79,13 +94,23 @@ def fetch_macro(
     end: date,
     *,
     max_sources: int = 2,
+    aliases: Mapping[str, Mapping[str, str]] | None = None,
 ) -> FetchResult:
-    """Same fall-through for FX and macro series."""
+    """Same fall-through for FX and macro series.
+
+    ``aliases[series_id][provider_id]`` is the id that provider uses for the series (see
+    ``DEFAULT_MACRO_ALIASES``); the result keeps the canonical ``series_id``.
+    """
+    names = (aliases or {}).get(series_id, {})
+
+    def own(p: MacroProvider) -> str:
+        return names.get(p.provider_id, series_id)
+
     return _fetch(
         series_id,
         providers,
-        lambda p: p.supports_series(series_id),
-        lambda p: p.series(series_id, start, end),
+        lambda p: p.supports_series(own(p)),
+        lambda p: p.series(own(p), start, end),
         max_sources,
     )
 

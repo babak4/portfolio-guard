@@ -10,13 +10,20 @@ import csv
 from collections import defaultdict
 from collections.abc import Iterable
 from datetime import date, datetime
-from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from guard.ingest.model import ZERO, Holding, IngestIntegrityError, Snapshot, is_fixed_satellite
+from guard.ingest.model import (
+    ZERO,
+    Holding,
+    IngestIntegrityError,
+    Snapshot,
+    is_fixed_satellite,
+    merge_same_isin,
+    to_decimal,
+)
 
 _REQUIRED = ("account_id", "platform", "isin", "name", "quantity", "value_gbp")
 
@@ -35,10 +42,13 @@ def load_manual_holdings(path: Path, *, satellites: Iterable[str]) -> list[Holdi
     satellites = tuple(satellites)
     holdings: list[Holding] = []
     for n, row in enumerate(_rows(path), start=1):
+        if not isinstance(row, dict):
+            raise IngestIntegrityError(f"{path.name} row {n}: expected a mapping")
         missing = [k for k in _REQUIRED if row.get(k) in (None, "")]
         if missing:
             raise IngestIntegrityError(f"{path.name} row {n}: missing {', '.join(missing)}")
-        quantity, value = Decimal(str(row["quantity"])), Decimal(str(row["value_gbp"]))
+        quantity = to_decimal(row["quantity"], f"{path.name} row {n} quantity", non_negative=True)
+        value = to_decimal(row["value_gbp"], f"{path.name} row {n} value_gbp", non_negative=True)
         ticker = str(row.get("ticker") or "")
         holdings.append(
             Holding(
@@ -53,7 +63,7 @@ def load_manual_holdings(path: Path, *, satellites: Iterable[str]) -> list[Holdi
                 excluded=bool(ticker) and is_fixed_satellite(ticker, None, satellites),
             )
         )
-    return holdings
+    return list(merge_same_isin(holdings))
 
 
 def snapshots_from_manual(

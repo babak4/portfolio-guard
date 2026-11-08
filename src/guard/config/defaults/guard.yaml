@@ -42,6 +42,7 @@ constraints:
 data:
   jump_threshold: 0.15           # one-day move treated as implausible
   crosscheck_tolerance: 0.005    # two sources must agree within this fraction
+  crosscheck_min_overlap: 0.9    # share of the primary's dates the second source must cover
   stale_trading_days: 2
   max_gap_days: 10
 

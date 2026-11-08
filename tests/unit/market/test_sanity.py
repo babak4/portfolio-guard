@@ -10,7 +10,11 @@ from guard.market import JumpError, Observation, StaleDataError, check_jumps, ch
 from guard.market.calendar import is_trading_day, last_trading_day_before
 
 RULES = DataRules(
-    jump_threshold=0.15, crosscheck_tolerance=0.005, stale_trading_days=0, max_gap_days=10
+    jump_threshold=0.15,
+    crosscheck_tolerance=0.005,
+    crosscheck_min_overlap=0.9,
+    stale_trading_days=0,
+    max_gap_days=10,
 )
 
 
@@ -29,6 +33,16 @@ def test_14_percent_jump_passes_and_downward_jump_stops() -> None:
     check_jumps("S", "yahoo", _obs("100", "114"), RULES)
     with pytest.raises(JumpError):
         check_jumps("S", "yahoo", _obs("100", "80"), RULES)
+
+
+def test_jump_exactly_at_threshold_passes() -> None:
+    check_jumps("S", "yahoo", _obs("100", "115"), RULES)
+
+
+def test_previous_value_zero_is_skipped() -> None:
+    check_jumps("S", "yahoo", _obs("0", "50", "55"), RULES)
+    with pytest.raises(JumpError):
+        check_jumps("S", "yahoo", _obs("0", "50", "100"), RULES)
 
 
 # Monday 25 May 2026 is the UK spring bank holiday.

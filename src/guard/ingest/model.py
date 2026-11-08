@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -31,6 +31,53 @@ class Holding:
     price: Decimal
     value_gbp: Decimal
     excluded: bool
+
+
+def to_decimal(value: object, field: str, *, non_negative: bool = False) -> Decimal:
+    """A finite ``Decimal`` from a JSON/YAML/CSV value, or ``IngestIntegrityError``."""
+    if value is None or isinstance(value, bool):
+        raise IngestIntegrityError(f"missing or invalid number for {field}")
+    try:
+        number = Decimal(str(value))
+    except ArithmeticError as e:
+        raise IngestIntegrityError(f"invalid number for {field}: {value!r}") from e
+    if not number.is_finite():
+        raise IngestIntegrityError(f"number for {field} is not finite: {value!r}")
+    if non_negative and number < 0:
+        raise IngestIntegrityError(f"negative number for {field}: {value!r}")
+    return number
+
+
+def merge_same_isin(holdings: Iterable[Holding]) -> tuple[Holding, ...]:
+    """Merge lines with the same account and ISIN: quantity and value add up.
+
+    The price is the quantity-weighted average; with no quantity, the price of the larger line.
+    Order of first appearance is kept.
+    """
+    groups: dict[tuple[str, str], list[Holding]] = {}
+    for h in holdings:
+        groups.setdefault((h.account_id, h.isin), []).append(h)
+    merged: list[Holding] = []
+    for lines in groups.values():
+        first = lines[0]
+        if len(lines) == 1:
+            merged.append(first)
+            continue
+        quantity = sum((h.quantity for h in lines), ZERO)
+        if quantity:
+            price = sum((h.price * h.quantity for h in lines), ZERO) / quantity
+        else:
+            price = max(lines, key=lambda h: h.value_gbp).price
+        merged.append(
+            replace(
+                first,
+                quantity=quantity,
+                price=price,
+                value_gbp=sum((h.value_gbp for h in lines), ZERO),
+                excluded=any(h.excluded for h in lines),
+            )
+        )
+    return tuple(merged)
 
 
 @dataclass(frozen=True)

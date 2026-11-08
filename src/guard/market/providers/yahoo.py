@@ -53,13 +53,14 @@ def parse_csv(content: bytes, listing: Listing) -> list[Observation]:
         raise ProviderError(f"yahoo: unexpected CSV header for {listing.listing_id}")
     rows: list[Observation] = []
     for rec in reader:
-        if not rec["Close"]:
+        raw = (rec["Close"] or "").strip()
+        if not raw or raw.lower() == "nan":  # no close that day: skip the row, keep the rest
             continue
         try:
             d = date.fromisoformat(rec["Date"][:10])
         except ValueError as e:
             raise ProviderError(f"yahoo: bad date {rec['Date']!r}") from e
-        close = to_decimal(rec["Close"], "close")
+        close = to_decimal(raw, "close")
         if listing.quoted_in_minor_units:
             close = close / 100
         rows.append(Observation(d, close))

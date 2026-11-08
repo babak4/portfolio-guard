@@ -7,6 +7,7 @@ checked against the demo host; they are listed in ``docs/queries/t212-payload-sh
 from __future__ import annotations
 
 import json
+import math
 import time
 from collections.abc import Callable, Mapping
 from datetime import date, datetime
@@ -23,6 +24,8 @@ from guard.ingest.model import (
     IngestIntegrityError,
     Snapshot,
     is_fixed_satellite,
+    merge_same_isin,
+    to_decimal,
 )
 from guard.secrets import get_secret
 
@@ -45,10 +48,25 @@ _ALLOWED_PATHS = frozenset(
 _MAX_PAGES = 500
 _MAX_RETRIES = 6
 _MAX_WAIT = 120.0
+_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_KNOWN_HOSTS = frozenset({"live.trading212.com", "demo.trading212.com"})
 
 
 class ReadOnlyViolation(ValueError):
     """A request other than GET, or to a path outside the read-only allowlist."""
+
+
+class T212RequestError(RuntimeError):
+    """The request kept failing at the transport level (timeouts, connection errors)."""
+
+
+def _check_base_url(base_url: str) -> None:
+    parts = urlsplit(base_url)
+    if parts.scheme != "https" or parts.hostname not in _KNOWN_HOSTS:
+        raise ValueError(
+            "base URL must be https on live.trading212.com or demo.trading212.com, "
+            f"not {parts.scheme}://{parts.hostname}"
+        )
 
 
 class T212Client:
@@ -64,6 +82,8 @@ class T212Client:
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.time,
     ) -> None:
+        if transport is None:
+            _check_base_url(base_url)
         parts = urlsplit(base_url)
         self._origin = f"{parts.scheme}://{parts.netloc}"
         self._prefix = parts.path.rstrip("/")
@@ -92,9 +112,13 @@ class T212Client:
         reset = headers.get("x-ratelimit-reset")
         try:
             if retry_after is not None:
-                return min(float(retry_after), _MAX_WAIT)
-            if reset is not None:
-                return min(max(float(reset) - self._clock(), 0.0), _MAX_WAIT)
+                seconds = float(retry_after)
+                if math.isfinite(seconds) and seconds >= 0:
+                    return min(seconds, _MAX_WAIT)
+            elif reset is not None:
+                seconds = float(reset) - self._clock()
+                if math.isfinite(seconds):
+                    return min(max(seconds, 0.0), _MAX_WAIT)
         except ValueError:
             pass
         return min(backoff, _MAX_WAIT)
@@ -108,8 +132,18 @@ class T212Client:
             raise ReadOnlyViolation(f"path not in read-only allowlist: {path_only}")
         backoff = 1.0
         for attempt in range(_MAX_RETRIES + 1):
-            resp = self._http.get(url)
-            if resp.status_code == 429 and attempt < _MAX_RETRIES:
+            last = attempt == _MAX_RETRIES
+            try:
+                resp = self._http.get(url)
+            except httpx.TransportError as e:
+                if last:
+                    raise T212RequestError(
+                        f"request failed after {attempt + 1} attempts: {type(e).__name__}"
+                    ) from e
+                self._sleep(min(backoff, _MAX_WAIT))
+                backoff *= 2
+                continue
+            if resp.status_code in _RETRY_STATUSES and not last:
                 self._sleep(self._wait_seconds(resp.headers, backoff))
                 backoff *= 2
                 continue
@@ -130,7 +164,11 @@ class T212Client:
         items: list[Any] = []
         seen: set[str] = set()
         next_path: str | None = path
-        while next_path is not None and next_path not in seen and len(seen) < _MAX_PAGES:
+        while next_path is not None:
+            if next_path in seen:
+                raise IngestIntegrityError(f"pagination repeats a page: {next_path}")
+            if len(seen) >= _MAX_PAGES:
+                raise IngestIntegrityError(f"pagination exceeds {_MAX_PAGES} pages")
             seen.add(next_path)
             doc = self.get(next_path)
             if isinstance(doc, list):
@@ -153,10 +191,7 @@ def _dec(value: Any, field: str) -> Decimal:
     """Numbers arrive as JSON numbers or strings; both are accepted."""
     if value is None or isinstance(value, bool):
         raise IngestIntegrityError(f"missing or invalid number for {field}")
-    try:
-        return Decimal(str(value))
-    except ArithmeticError as e:
-        raise IngestIntegrityError(f"invalid number for {field}: {value!r}") from e
+    return to_decimal(value, field)
 
 
 def _holding(
@@ -214,7 +249,7 @@ def fetch_snapshot(
     from it; beyond that the run stops.
     """
     instruments = {str(i["ticker"]): i for i in client.get_all(INSTRUMENTS)}
-    holdings = tuple(
+    holdings = merge_same_isin(
         _holding(p, instruments, account, satellites) for p in client.get_all(POSITIONS)
     )
     summary = client.get(SUMMARY)

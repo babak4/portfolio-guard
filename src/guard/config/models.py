@@ -60,6 +60,7 @@ class Constraints(_Strict):
 class DataRules(_Strict):
     jump_threshold: float = Field(gt=0, lt=1)
     crosscheck_tolerance: float = Field(gt=0, lt=1)
+    crosscheck_min_overlap: float = Field(gt=0, le=1)
     stale_trading_days: int = Field(ge=0)
     max_gap_days: int = Field(gt=0)
 

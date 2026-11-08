@@ -3,8 +3,9 @@
 Flow for one series::
 
     result  = fetch_prices(listing, [YahooProvider(), StooqProvider()], start, end)
-    # or fetch_macro("DEXUSUK", [FredProvider()], start, end)
-    checked = cross_check(result, rules.crosscheck_tolerance)   # raises if not two agreeing sources
+    # or fetch_macro("USD_PER_GBP", [FredProvider(), FrankfurterProvider()], start, end,
+    #                 aliases=DEFAULT_MACRO_ALIASES)
+    checked = cross_check(result, rules)   # raises if not two independent, agreeing sources
     check_jumps(checked.series_id, checked.sources[0], checked.observations, rules)
     check_staleness(checked.series_id, checked.sources[0], checked.observations[-1].day,
                     as_of, rules, markets=("uk",))
@@ -29,11 +30,17 @@ Pass an ``httpx.Client`` with a mock transport to run any of them offline.
 
 Fetching (``guard.market.fetch``): ``fetch_prices`` and ``fetch_macro`` try providers in order,
 record failures (HTTP 429, timeouts, empty data) in ``FetchResult.errors`` and move on, stopping
-after ``max_sources`` (default 2) return data. ``FetchResult(series_id, sources, errors)``.
+after ``max_sources`` (default 2) return data. Malformed payloads (short rows, bad dates, non-UTF-8
+bodies) count as provider failures. ``FetchResult(series_id, sources, errors)``. Providers name
+FX/macro series differently, so ``fetch_macro(..., aliases=...)`` maps a canonical id to each
+provider's own (``DEFAULT_MACRO_ALIASES``: ``USD_PER_GBP`` is FRED ``DEXUSUK`` and Frankfurter
+``GBPUSD``, both US dollars per pound); the result keeps the canonical id.
 
 Verification (all raise ``DataIntegrityError`` subclasses carrying ``rule``, ``series_id`` and
-``sources``): ``cross_check(result, tolerance) -> CheckedSeries`` (one source:
-``UntrustedSeriesError``; disagreement or no shared dates: ``CrossCheckError`` naming both),
+``sources``): ``cross_check(result, rules) -> CheckedSeries`` (one source or the same source twice:
+``UntrustedSeriesError``; disagreement beyond ``crosscheck_tolerance``, a latest primary date
+missing from the second source, or coverage below ``crosscheck_min_overlap``:
+``CrossCheckError`` naming both; carried-forward ``filled`` observations are ignored),
 ``check_staleness`` (``StaleDataError``) and ``check_jumps`` (``JumpError``) in
 ``guard.market.sanity``. A ``CheckedSeries`` holds the
 primary source's observations and every agreeing source id. Two sources are independent when their
@@ -62,11 +69,18 @@ from guard.market.base import (
     UntrustedSeriesError,
 )
 from guard.market.crosscheck import CheckedSeries, cross_check
-from guard.market.fetch import FetchResult, SourceSeries, fetch_macro, fetch_prices
+from guard.market.fetch import (
+    DEFAULT_MACRO_ALIASES,
+    FetchResult,
+    SourceSeries,
+    fetch_macro,
+    fetch_prices,
+)
 from guard.market.sanity import check_jumps, check_staleness
 from guard.market.store import MarketStore
 
 __all__ = [
+    "DEFAULT_MACRO_ALIASES",
     "CheckedSeries",
     "CrossCheckError",
     "DataIntegrityError",

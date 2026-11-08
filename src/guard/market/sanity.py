@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import date, timedelta
+from decimal import Decimal
 
 from guard.config.models import DataRules
 from guard.market.base import JumpError, Observation, StaleDataError
@@ -42,11 +43,12 @@ def check_jumps(
     series_id: str, source_id: str, observations: Sequence[Observation], rules: DataRules
 ) -> None:
     """Stop when a consecutive pair of observations moves by more than the jump threshold."""
+    threshold = Decimal(str(rules.jump_threshold))  # decimal, so a move exactly at it passes
     for prev, cur in zip(observations, observations[1:], strict=False):
         if prev.value == 0:
             continue
         move = abs(cur.value / prev.value - 1)
-        if move > rules.jump_threshold:
+        if move > threshold:
             raise JumpError(
                 "jump",
                 series_id,

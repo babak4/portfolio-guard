@@ -34,6 +34,8 @@ from guard.storage.ingest_store import (
     write_snapshot,
 )
 
+_LOCK_WAIT_SECONDS = 30.0
+
 Outcome = Literal["ok", "skipped", "stopped", "locked"]
 
 
@@ -52,7 +54,7 @@ def run_snapshot(
     local = now.astimezone(ZoneInfo(config.schedule.timezone))
     day = local.date()
     slot = day.isoformat()
-    with writer_lock() as acquired:
+    with writer_lock(wait_seconds=_LOCK_WAIT_SECONDS) as acquired:
         if not acquired:
             return "locked"
         conn = open_ops()
@@ -61,17 +63,17 @@ def run_snapshot(
                 return "skipped"
             try:
                 snapshots, history = _collect(now, day, config, client_for, manual_path)
+                for snap in snapshots:
+                    write_snapshot(conn, snap)
+                for account_id, kinds in history.items():
+                    for kind, pairs in kinds.items():
+                        store_raw_history(conn, kind, account_id, pairs, now)
             except IngestIntegrityError as e:
                 record_snapshot_run(conn, slot, "stopped", str(e), now, datetime.now(UTC))
                 return "stopped"
             except Exception as e:
                 record_snapshot_run(conn, slot, "failed", type(e).__name__, now, datetime.now(UTC))
                 raise
-            for snap in snapshots:
-                write_snapshot(conn, snap)
-            for account_id, kinds in history.items():
-                for kind, pairs in kinds.items():
-                    store_raw_history(conn, kind, account_id, pairs, now)
             record_snapshot_run(conn, slot, "ok", None, now, datetime.now(UTC))
             return "ok"
         finally:
@@ -118,7 +120,16 @@ def daily_trigger(schedule: Schedule) -> CronTrigger:
 
 def build_scheduler(job: Callable[[datetime], object], schedule: Schedule) -> BlockingScheduler:
     scheduler = BlockingScheduler(timezone=ZoneInfo(schedule.timezone))
-    scheduler.add_job(lambda: job(datetime.now(UTC)), daily_trigger(schedule), id="daily-snapshot")
+    hour, minute = schedule.daily_check_time.split(":")
+    until_midnight = 24 * 3600 - (int(hour) * 3600 + int(minute) * 60)
+    scheduler.add_job(
+        lambda: job(datetime.now(UTC)),
+        daily_trigger(schedule),
+        id="daily-snapshot",
+        misfire_grace_time=until_midnight,
+        coalesce=True,
+        max_instances=1,
+    )
     return scheduler
 
 
