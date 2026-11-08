@@ -10,5 +10,8 @@ dist/
 # real data and secrets never live in the repo
 data/
 *.enc.yaml
+.env
+.env.*
+!.env.example
 msci*.csv
 msci*.xlsx
