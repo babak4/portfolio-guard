@@ -51,7 +51,7 @@ def parse_rows(table: list[list[str]]) -> list[Observation]:
         try:
             day = pd.to_datetime(r[0]).date()
             value = Decimal(str(r[1]).replace(",", "").strip())
-        except (ValueError, TypeError, InvalidOperation):
+        except ValueError, TypeError, InvalidOperation:
             continue
         if value.is_finite():
             rows.append(Observation(day, value))
