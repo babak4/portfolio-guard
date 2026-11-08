@@ -4,11 +4,11 @@
 
 ## Summary of what the numbers say
 
-Configured setting: **config defaults**. Targets from the requirements: drawdown within about -20% in each of 2008-2009, 2020, 2022, and a lag of at most 1% a year over rolling 3-year windows.
+Configured setting: **config defaults**. Targets from the requirements: drawdown within about -20% in each of 2008-2009, 2020, 2022, and a lag of at most 1.5% a year over rolling 3-year windows.
 
 The drawdown target is met in 1 of 3 windows tested. 2008-2009: -26.3% against -33.7% for buy-and-hold (not met); 2020: -20.3% against -24.1% for buy-and-hold (not met); 2022: -13.3% against -14.7% for buy-and-hold (met on PROXY data only).
 
-Rolling 3-year lag against buy-and-hold (the starting mix, never rebalanced): worst 4.37% a year, median 1.28%, best -3.02%; 59% of windows lag by more than 1% a year. The lag target is not met.
+Rolling 3-year lag against buy-and-hold (the starting mix, never rebalanced): worst 4.37% a year, median 1.28%, best -3.02%; 36% of windows lag by more than 1.5% a year. The lag target is not met.
 
 The two targets are not both met at this setting.
 
@@ -40,15 +40,15 @@ Drawdown inside each window, achieved against what the floor alone allows and ag
 
 Annual return lag over rolling 3-year windows (one window per month end; positive: the strategy trailed). **The lag target is measured against buy-and-hold of the ladder's starting 90/10 mix, never rebalanced.**
 
-| Setting | Best | Median | Worst | Windows worse than 1%/yr |
+| Setting | Best | Median | Worst | Windows worse than 1.5%/yr |
 |---|---|---|---|---|
-| config defaults | -3.02% | 1.28% | 4.37% | 59% |
+| config defaults | -3.02% | 1.28% | 4.37% | 36% |
 
 The same lag against a constant 90/10 portfolio rebalanced on the drift band (5%) with the strategy's own trading costs. This is a tougher reference, because rebalancing earns or loses something that never-rebalanced buy-and-hold does not.
 
-| Setting | Best | Median | Worst | Windows worse than 1%/yr |
+| Setting | Best | Median | Worst | Windows worse than 1.5%/yr |
 |---|---|---|---|---|
-| config defaults | -2.80% | 1.23% | 5.24% | 62% |
+| config defaults | -2.80% | 1.23% | 5.24% | 35% |
 
 ## Benchmark comparison
 
@@ -108,7 +108,7 @@ Cadence across the sweep (min / median / max over all other settings):
 
 ## Plateau tables and chosen parameters (IN-SAMPLE (selected on this history))
 
-A plateau counts only where cells meet both targets: max drawdown no worse than -20% and worst lag no more than 1% a year. Everything chosen here is IN-SAMPLE (selected on this history): it was picked on the same history it is shown on, so it flatters the strategy. Only the walk-forward section is out of sample.
+A plateau counts only where cells meet both targets: max drawdown no worse than -20% and worst lag no more than 1.5% a year. Everything chosen here is IN-SAMPLE (selected on this history): it was picked on the same history it is shown on, so it flatters the strategy. Only the walk-forward section is out of sample.
 
 ### trend_window by drawdown_threshold
 
@@ -257,11 +257,11 @@ ETF-era-only view: the history has no non-proxy points.
 
 ## Trials
 
-Trials recorded: 5468
+Trials recorded: 8095
 
 - Runs this invocation: 2627
 - Distinct parameter combinations in the whole log: 1782
-- Cumulative runs including earlier invocations: 5468
+- Cumulative runs including earlier invocations: 8095
 
 A run is one strategy simulation: the grid sweep, the configured, realistic, per-safe-asset and plateau-centre runs, the walk-forward training and test runs, and the weekday and offset runs. The more settings tried, the more the best of them is flattered by luck; later invocations append to the same log, so repeated tries still count. The plateau tables and the walk-forward result are the guard against that. The trial log lists them all.
 

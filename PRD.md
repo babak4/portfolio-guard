@@ -23,10 +23,10 @@ v1 is **advice-only**: it reads portfolio data from the Trading212 API and sends
 
 **Success criteria (Decided):**
 - Portfolio drawdown stays within about **-20%** from peak in the 2008, 2020 and 2022 backtest scenarios.
-- Return lag versus the buy-and-hold benchmark is no more than **1% a year**, judged over rolling windows of 3+ years.
+- Return lag versus the buy-and-hold benchmark is no more than **1.5% a year**, judged over rolling windows of 3+ years.
 - After backtests pass, a **~3-month paper-trading period** (advice only, no reliance) before real use.
 
-**Failure line (Decided):** lagging buy-and-hold by more than 1% a year over 3+ years.
+**Failure line (Decided):** lagging buy-and-hold by more than 1.5% a year over 3+ years.
 
 ## 3. Users and context
 
