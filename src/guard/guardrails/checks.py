@@ -10,7 +10,7 @@ from collections import defaultdict
 from dataclasses import replace
 from decimal import Decimal
 
-from guard.advice.book import ZERO, dec, floor_pounds, whole
+from guard.advice.book import ZERO, Book, dec, floor_pounds, whole
 from guard.advice.constraints import pct
 from guard.advice.engine import (
     AdviceInputs,
@@ -60,6 +60,15 @@ def check_trade_sanity(trades: tuple[Trade, ...], inputs: AdviceInputs) -> list[
             proceeds[t.account_id] += t.amount
         else:
             bought[t.account_id] += t.amount
+            fund = funds.get(t.symbol)
+            buyable = fund is not None and (
+                fund.role == "growth" or t.symbol == inputs.config.portfolio.safe_asset
+            )
+            if not buyable:
+                problems.append(
+                    f"{label}: only growth funds in the fund reference and the safe asset "
+                    "may be bought"
+                )
     for (account, symbol), amount in sold.items():
         if amount > held[(account, symbol)]:
             problems.append(
@@ -101,6 +110,32 @@ def _balance_accounts(trades: tuple[Trade, ...], inputs: AdviceInputs) -> tuple[
     return tuple(out)
 
 
+def _gap_flag(
+    inputs: AdviceInputs, trades: tuple[Trade, ...], after: Book
+) -> tuple[Flag | None, float]:
+    """The rebalance gap left on the book once ``trades`` are made, and the growth share.
+
+    The gap is the distance between the growth share and the advised equity weight, as a
+    share of tactical value; it is flagged when it is worth at least a minimum trade.
+    """
+    total = after.total()
+    if total <= 0:
+        return None, 0.0
+    share = after.growth() / total
+    equity = dec(inputs.equity_after)
+    remaining = abs(equity * total - after.growth())
+    if remaining < max(Decimal(inputs.config.allocation.min_trade_gbp), Decimal(1)):
+        return None, float(share)
+    flag = Flag(
+        "rebalance_gap",
+        "warn",
+        f"after the trades growth is {pct(share)} against the advised {pct(equity)}: "
+        f"{pct(remaining / total)} of the tactical portfolio is still to move; "
+        "it continues next week",
+    )
+    return flag, float(share)
+
+
 def _blocked(
     draft: Advice, reasons: tuple[str, ...], checks: list[GuardrailCheck], flags: tuple[Flag, ...]
 ) -> Advice:
@@ -132,6 +167,10 @@ def apply_guardrails(draft: Advice, inputs: AdviceInputs) -> Advice:
         )
     checks.append(GuardrailCheck("pause_switch", True, "advice is not paused"))
 
+    if draft.status == "blocked":
+        checks.append(GuardrailCheck("book_complete", False, "; ".join(draft.reasons)))
+        return replace(draft, guardrails=tuple(checks))
+
     flags = draft.flags
     trades = draft.trades
     problems = check_trade_sanity(trades, inputs)
@@ -154,15 +193,18 @@ def apply_guardrails(draft: Advice, inputs: AdviceInputs) -> Advice:
         factor = cap / biggest
         trades = _balance_accounts(_scale(trades, factor, inputs), inputs)
         label = f"capped at {pct(cfg.ladder.max_weekly_change, 0)} this week; continues next week"
-        kept = tuple(f for f in flags if f.kind != "contribution")
-        plan, plan_flags = plan_contributions(inputs, tactical_book(inputs).with_trades(trades))
-        flags = (*kept, Flag("weekly_cap", "warn", label), *plan_flags)
+        kept = tuple(f for f in flags if f.kind not in ("contribution", "rebalance_gap"))
+        capped_book = tactical_book(inputs).with_trades(trades)
+        plan, plan_flags = plan_contributions(inputs, capped_book)
+        gap, _ = _gap_flag(inputs, trades, capped_book)
+        flags = (*kept, Flag("weekly_cap", "warn", label), *plan_flags, *((gap,) if gap else ()))
         checks.append(
             GuardrailCheck(
                 "weekly_cap",
                 True,
                 f"trades of {biggest} exceeded the cap of {whole(cap)}; all trades scaled by "
                 f"{factor:.4f}",
+                adjusted=True,
             )
         )
         problems = check_trade_sanity(trades, inputs)
@@ -176,20 +218,36 @@ def apply_guardrails(draft: Advice, inputs: AdviceInputs) -> Advice:
             )
         )
 
-    after = tactical_book(inputs).with_trades(trades)
+    before = tactical_book(inputs)
+    after = before.with_trades(trades)
     total = after.total()
     share = after.growth() / total if total > 0 else None
+    share_before = before.growth() / before.total() if before.total() > 0 else None
     floor = dec(cfg.ladder.equity_floor)
     if share is not None and share < floor - FLOOR_TOLERANCE:
-        reason = (
-            f"equity floor: growth would be {pct(share)} of tactical value, below the "
-            f"{pct(floor, 0)} floor"
-        )
-        checks.append(GuardrailCheck("equity_floor", False, reason))
-        return _blocked(draft, (reason,), checks, flags)
-    shown = "no tactical holdings" if share is None else f"growth is {pct(share)} after trades"
-    checks.append(GuardrailCheck("equity_floor", True, f"{shown} (floor {pct(floor, 0)})"))
+        if share_before is not None and share >= share_before - FLOOR_TOLERANCE:
+            note = (
+                f"growth is {pct(share)} after trades, already below the {pct(floor, 0)} floor "
+                f"({pct(share_before)} before); the trades do not lower it"
+            )
+            checks.append(GuardrailCheck("equity_floor", True, note))
+        else:
+            reason = (
+                f"equity floor: growth would be {pct(share)} of tactical value, below the "
+                f"{pct(floor, 0)} floor"
+            )
+            checks.append(GuardrailCheck("equity_floor", False, reason))
+            return _blocked(draft, (reason,), checks, flags)
+    else:
+        shown = "no tactical holdings" if share is None else f"growth is {pct(share)} after trades"
+        checks.append(GuardrailCheck("equity_floor", True, f"{shown} (floor {pct(floor, 0)})"))
 
+    sleeve = replace(draft.sleeve, growth_after=float(share) if share is not None else 0.0)
     return replace(
-        draft, trades=trades, contribution_plan=plan, flags=flags, guardrails=tuple(checks)
+        draft,
+        trades=trades,
+        contribution_plan=plan,
+        flags=flags,
+        sleeve=sleeve,
+        guardrails=tuple(checks),
     )

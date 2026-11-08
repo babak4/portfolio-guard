@@ -8,7 +8,7 @@ from decimal import Decimal
 
 from guard.advice.book import ZERO, Book, build_book, dec, floor_pounds, split, whole
 from guard.advice.constraints import check_fees, check_unknown, check_us_only, pct
-from guard.advice.funds import FundRegistry
+from guard.advice.funds import FundRegistry, symbol_of
 from guard.advice.model import (
     Advice,
     AllocationRow,
@@ -21,6 +21,8 @@ from guard.config.models import GuardConfig
 from guard.ingest.model import Holding
 
 MOVE_EPSILON = 1e-9
+TARGET_SUM_TOLERANCE = 1e-6
+FUNDS_FILE = "$GUARD_DATA_DIR/config/funds.yaml"
 
 NO_TARGETS = "no per-fund targets set"
 NO_GROWTH_REBALANCE = "cannot rebalance: no growth fund held and no targets set"
@@ -31,9 +33,12 @@ NO_GROWTH_PLACE = "cannot place growth contribution: no growth fund held and no 
 class AdviceInputs:
     """Everything the advice builder needs.
 
-    ``cash`` is what each account can spend; ``contributions`` is the next contribution per
-    account. ``available_symbols`` are the symbols found in the Trading212 instruments list,
-    or ``None`` when that list was not fetched.
+    ``cash`` must be SPENDABLE cash per account (Trading212 ``availableToTrade``), not the
+    account's cash total: rebalance buys draw on it, so reserved or pending cash must not be in
+    it. ``contributions`` is the next contribution per account: money that is not in the
+    account yet and is never already counted in ``cash``. It is steered by the contribution
+    plan and never spent by the rebalance buys. ``available_symbols`` are the symbols found in
+    the Trading212 instruments list, or ``None`` when that list was not fetched.
     """
 
     holdings: tuple[Holding, ...]
@@ -45,6 +50,46 @@ class AdviceInputs:
     config: GuardConfig
     paused: bool = False
     available_symbols: frozenset[str] | None = None
+
+
+def unknown_holdings(inputs: AdviceInputs) -> tuple[str, ...]:
+    """Symbols of held, non-excluded positions that are missing from the fund registry."""
+    out = {
+        symbol_of(h.ticker)
+        for h in inputs.holdings
+        if not h.excluded and h.value_gbp > 0 and inputs.funds.find(h.ticker) is None
+    }
+    return tuple(sorted(out))
+
+
+def book_problems(inputs: AdviceInputs, book: Book) -> tuple[str, ...]:
+    """Reasons the book or the targets are too incomplete to size trades on; empty when fine."""
+    problems: list[str] = []
+    for symbol in unknown_holdings(inputs):
+        problems.append(
+            f"{symbol} is held but not in the fund reference, so the portfolio cannot be sized: "
+            f"add {symbol} to the funds file: {FUNDS_FILE}"
+        )
+    targets = inputs.config.allocation.growth_targets
+    if targets:
+        for symbol in sorted(targets):
+            fund = inputs.funds.get(symbol)
+            if fund is None or fund.role != "growth":
+                problems.append(
+                    f"target {symbol} is not a growth fund in the fund reference: fix "
+                    f"growth_targets or add it to the funds file: {FUNDS_FILE}"
+                )
+        held = book.by_symbol()
+        for symbol in sorted(held):
+            if book.roles.get(symbol) == "growth" and held[symbol] > 0 and symbol not in targets:
+                problems.append(
+                    f"{symbol} is held but has no target: add it to growth_targets, "
+                    "with 0 to sell it"
+                )
+        total = sum(targets.values())
+        if abs(total - 1.0) > TARGET_SUM_TOLERANCE:
+            problems.append(f"growth_targets sum to {total:g}, not 1: fix them")
+    return tuple(problems)
 
 
 def tactical_book(inputs: AdviceInputs) -> Book:
@@ -313,26 +358,31 @@ def build_advice(inputs: AdviceInputs) -> Advice:
     )
     flags.extend(check_unknown(inputs.holdings, inputs.funds))
 
+    problems = book_problems(inputs, book)
     targets = _target_values(cfg, book, equity) if total > 0 else None
     trades: tuple[Trade, ...] = ()
-    if targets is not None and _needs_action(inputs, book):
-        if not cfg.allocation.growth_targets:
+    plan: tuple[ContributionLine, ...] = ()
+    if not problems:
+        if targets is not None and _needs_action(inputs, book):
+            if not cfg.allocation.growth_targets:
+                flags.append(Flag("targets", "info", NO_TARGETS))
+            trades, gap_flags = _rebalance(inputs, book, targets)
+            flags.extend(gap_flags)
+        elif total > 0 and targets is None and _needs_action(inputs, book):
+            flags.append(Flag("targets", "warn", NO_GROWTH_REBALANCE))
+        plan, plan_flags = plan_contributions(inputs, book.with_trades(trades))
+        flags.extend(plan_flags)
+        if plan and not cfg.allocation.growth_targets:
             flags.append(Flag("targets", "info", NO_TARGETS))
-        trades, gap_flags = _rebalance(inputs, book, targets)
-        flags.extend(gap_flags)
-    elif total > 0 and targets is None and _needs_action(inputs, book):
-        flags.append(Flag("targets", "warn", NO_GROWTH_REBALANCE))
-    plan, plan_flags = plan_contributions(inputs, book.with_trades(trades))
-    flags.extend(plan_flags)
-    if plan and not cfg.allocation.growth_targets:
-        flags.append(Flag("targets", "info", NO_TARGETS))
 
     growth_actual = float(book.growth() / total) if total > 0 else 0.0
     safe_actual = float(book.safe() / total) if total > 0 else 0.0
-    sleeve = Sleeve(growth_actual, safe_actual, float(equity), float(1 - equity))
+    after = book.with_trades(trades)
+    growth_after = float(after.growth() / after.total()) if after.total() > 0 else 0.0
+    sleeve = Sleeve(growth_actual, safe_actual, float(equity), float(1 - equity), growth_after)
     advice = Advice(
-        status="advice",
-        reasons=(),
+        status="blocked" if problems else "advice",
+        reasons=problems,
         trades=trades,
         contribution_plan=plan,
         allocation=_allocation(inputs, book, targets, whole_value),

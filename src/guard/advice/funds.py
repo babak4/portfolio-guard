@@ -19,7 +19,8 @@ class Fund:
     """One line of the fund reference.
 
     ``ongoing_charge`` is a fraction (0.0019 is 0.19%); ``None`` means unknown and is never
-    guessed. ``available_on_t212`` is ``None`` when unknown.
+    guessed. ``available_on_t212`` is ``None`` when unknown. ``index_group`` names the index the
+    fund tracks; ``None`` means no like-for-like alternative is known.
     """
 
     symbol: str
@@ -32,6 +33,7 @@ class Fund:
     watchlist: bool = False
     verified: bool = False
     note: str = ""
+    index_group: str | None = None
 
 
 def symbol_of(ticker: str) -> str:
@@ -79,16 +81,19 @@ class FundRegistry:
         return fund.symbol if fund is not None else symbol_of(ticker)
 
     def alternatives(self, fund: Fund) -> tuple[Fund, ...]:
-        """Funds of the same role and category with a strictly lower known ongoing charge,
-        cheapest first. Availability is the caller's concern."""
-        if fund.ongoing_charge is None:
+        """Like-for-like funds that cost strictly less, cheapest first.
+
+        An alternative has the same role and the same non-null ``index_group``, and both
+        ongoing charges must be known. Availability is the caller's concern.
+        """
+        if fund.ongoing_charge is None or fund.index_group is None:
             return ()
         cheaper = [
             f
             for f in self.by_symbol.values()
             if f.symbol != fund.symbol
             and f.role == fund.role
-            and f.category == fund.category
+            and f.index_group == fund.index_group
             and f.ongoing_charge is not None
             and f.ongoing_charge < fund.ongoing_charge
         ]

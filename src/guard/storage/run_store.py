@@ -7,6 +7,7 @@ the advice in one transaction, so a run is either fully stored or not stored at 
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
@@ -24,6 +25,14 @@ PAUSED_KEY = "paused"
 
 class UnknownRun(LookupError):
     """No run row has this id."""
+
+
+class NotRespondable(ValueError):
+    """Only an ``ok`` weekly run has advice the owner can respond to."""
+
+
+class PausedError(RuntimeError):
+    """The pause switch was on when the run came to commit; nothing was written."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +99,17 @@ def get_advice(conn: sqlite3.Connection, run_id: str) -> str | None:
     return None if row is None else str(row["payload"])
 
 
+def advice_hash(payload: str) -> str:
+    """SHA-256 (hex) of a stored advice payload: the reference a response is tied to."""
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def advice_ref(conn: sqlite3.Connection, run_id: str) -> str | None:
+    """The hash of the advice stored for ``run_id``, or ``None`` when there is none."""
+    payload = get_advice(conn, run_id)
+    return None if payload is None else advice_hash(payload)
+
+
 def latest_ladder_state(conn: sqlite3.Connection) -> tuple[int, LadderState] | None:
     """The most recent saved ``(week, state)``, or ``None`` before the first advised run."""
     row = conn.execute(
@@ -144,37 +164,47 @@ def record_run(
     payload: str | None = None,
     advice: str | None = None,
     ladder: tuple[int, LadderState] | None = None,
+    refuse_if_paused: bool = False,
 ) -> RunRecord:
     """Record the run of a ``(kind, slot)``.
 
     A slot already recorded ``ok`` is left alone and its row is returned. An earlier
-    ``paused``, ``stopped`` or ``failed`` row is replaced. ``advice`` and ``ladder`` (week, new
-    state) are stored in the same transaction as the run row.
+    ``paused``, ``stopped`` or ``failed`` row is updated in place (never deleted: a journal entry
+    may point at it). ``advice`` and ``ladder`` (week, new state) are stored in the same
+    transaction as the run row. With ``refuse_if_paused`` the pause switch is read inside that
+    transaction and ``PausedError`` is raised, with nothing written, when it is on.
     """
     run_id = run_id_for(kind, slot)
     with transaction(conn):
         existing = get_run_for_slot(conn, kind, slot)
         if existing is not None and existing.status == "ok":
             return existing
-        conn.execute("DELETE FROM run WHERE kind = ? AND slot = ?", (kind, slot))
-        conn.execute(
-            "INSERT INTO run (run_id, kind, slot, status, stop_reason, inputs_hash,"
-            " config_version, code_version, payload, started_at, finished_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                run_id,
-                kind,
-                slot,
-                status,
-                stop_reason,
-                inputs_hash,
-                config_version,
-                code_version,
-                payload,
-                _stamp(started_at),
-                _stamp(finished_at),
-            ),
+        if refuse_if_paused and get_paused(conn):
+            raise PausedError(run_id)
+        values = (
+            status,
+            stop_reason,
+            inputs_hash,
+            config_version,
+            code_version,
+            payload,
+            _stamp(started_at),
+            _stamp(finished_at),
         )
+        if existing is not None:
+            conn.execute(
+                "UPDATE run SET status = ?, stop_reason = ?, inputs_hash = ?, config_version = ?,"
+                " code_version = ?, payload = ?, started_at = ?, finished_at = ?"
+                " WHERE kind = ? AND slot = ?",
+                (*values, kind, slot),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO run (status, stop_reason, inputs_hash, config_version, code_version,"
+                " payload, started_at, finished_at, run_id, kind, slot)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (*values, run_id, kind, slot),
+            )
         if advice is not None:
             save_advice(conn, run_id, advice, finished_at)
         if ladder is not None:
@@ -194,19 +224,29 @@ def last_successful_run(conn: sqlite3.Connection, kind: str) -> RunRecord | None
 def record_response(
     conn: sqlite3.Connection, run_id: str, decision: Decision, note: str | None, now: datetime
 ) -> int:
-    """Append the owner's response. A later response supersedes the earlier one; no row changes."""
+    """Append the owner's response to an ``ok`` weekly run, tied to the hash of the advice stored
+    for it. A later response supersedes the earlier one; no row changes."""
     if decision not in DECISIONS:
         raise ValueError(f"decision must be one of {DECISIONS}, not {decision!r}")
     with transaction(conn):
-        if get_run(conn, run_id) is None:
+        run = get_run(conn, run_id)
+        if run is None:
             raise UnknownRun(run_id)
+        if run.kind != "weekly" or run.status != "ok":
+            raise NotRespondable(
+                f"{run_id} is a {run.status} {run.kind} run; only an ok weekly run has advice "
+                "to respond to"
+            )
+        ref = advice_ref(conn, run_id)
+        if ref is None:
+            raise NotRespondable(f"{run_id} has no stored advice to respond to")
         previous: Any = conn.execute(
             "SELECT MAX(id) FROM decision_journal WHERE run_id = ?", (run_id,)
         ).fetchone()[0]
         cur = conn.execute(
             "INSERT INTO decision_journal (run_id, advice_ref, decision, note, recorded_at,"
             " supersedes) VALUES (?, ?, ?, ?, ?, ?)",
-            (run_id, run_id, decision, note, _stamp(now), previous),
+            (run_id, ref, decision, note, _stamp(now), previous),
         )
     assert cur.lastrowid is not None
     return cur.lastrowid

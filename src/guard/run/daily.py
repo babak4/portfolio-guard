@@ -18,6 +18,7 @@ from guard.run.audit import canonical_json, inputs_hash
 from guard.run.core import TRADING_DAYS_PER_WEEK, compute_signals
 from guard.run.deps import Deps
 from guard.run.live_series import build_live_levels
+from guard.run.redact import redact_amounts
 from guard.run.results import DailyEvent, DailyResult
 from guard.storage import run_store, writer_lock
 
@@ -41,15 +42,30 @@ def run_daily(deps: Deps, now: datetime) -> DailyResult:
         return _locked(deps, now, day)
 
 
-def _events(deps: Deps, day_return: float, week_return: float, vol: Any) -> list[DailyEvent]:
+UNCONFIRMED_TEXT = " This move is not confirmed by the second source."
+PAUSED_TEXT = "No fast-path guidance: advice is paused."
+
+
+def _events(
+    deps: Deps,
+    day_return: float,
+    week_return: float,
+    vol: Any,
+    *,
+    paused: bool = False,
+    unconfirmed: bool = False,
+) -> list[DailyEvent]:
     check = deps.config.daily_check
     fast_drop = deps.config.ladder.fast_path_weekly_drop
-    fast = week_return <= -fast_drop + _EPS
-    fast_text = (
-        f"The fast path applies: the week's fall is past {fast_drop:.0%}."
-        if fast
-        else f"The fast path does not apply: the week's fall is not past {fast_drop:.0%}."
-    )
+    fast = week_return <= -fast_drop + _EPS and not paused
+    if paused:
+        fast_text = PAUSED_TEXT
+    elif fast:
+        fast_text = f"The fast path applies: the week's fall is past {fast_drop:.0%}."
+    else:
+        fast_text = f"The fast path does not apply: the week's fall is not past {fast_drop:.0%}."
+    if unconfirmed:
+        fast_text += UNCONFIRMED_TEXT
     out: list[DailyEvent] = []
     if day_return <= -check.day_drop + _EPS:
         out.append(
@@ -85,7 +101,9 @@ def _locked(deps: Deps, now: datetime, day: date) -> DailyResult:
     slot = day.isoformat()
     conn = deps.ops
     existing = run_store.get_run_for_slot(conn, KIND, slot)
-    if existing is not None and existing.status == "ok":
+    paused = run_store.get_paused(conn)
+    # A stored result carries the guidance of its time; while paused it is computed afresh.
+    if existing is not None and existing.status == "ok" and not paused:
         return _from_stored(slot, existing)
 
     def record(
@@ -112,6 +130,9 @@ def _locked(deps: Deps, now: datetime, day: date) -> DailyResult:
             deps.macro_providers,
             MarketStore(deps.warehouse),
             day + timedelta(days=1),
+            returns_check="advisory",
+            history="daily",
+            required_close=day,
         )
         if len(live.levels) <= TRADING_DAYS_PER_WEEK or live.weekly_return is None:
             raise DataIntegrityError(
@@ -119,7 +140,14 @@ def _locked(deps: Deps, now: datetime, day: date) -> DailyResult:
             )
         day_return = live.levels[-1] / live.levels[-2] - 1.0
         signals = compute_signals(deps.config.signals, live.days, live.levels)
-        events = _events(deps, day_return, live.weekly_return, signals.volatility)
+        events = _events(
+            deps,
+            day_return,
+            live.weekly_return,
+            signals.volatility,
+            paused=paused,
+            unconfirmed=live.unconfirmed,
+        )
         payload = {
             "kind": KIND,
             "slot": slot,
@@ -128,6 +156,9 @@ def _locked(deps: Deps, now: datetime, day: date) -> DailyResult:
             "week_return": live.weekly_return,
             "volatility": signals.volatility,
             "events": events,
+            "unconfirmed": live.unconfirmed,
+            "unconfirmed_note": live.unconfirmed_note,
+            "paused": paused,
             "inputs": {
                 "days": live.days[-_INPUT_ROWS:],
                 "levels": live.levels[-_INPUT_ROWS:],
@@ -148,10 +179,13 @@ def _locked(deps: Deps, now: datetime, day: date) -> DailyResult:
             day_return=day_return,
             week_return=live.weekly_return,
             last_close_date=live.last_close_date,
+            unconfirmed=live.unconfirmed,
+            paused=paused,
         )
     except DataIntegrityError as e:
-        log.warning("daily check %s stopped: %s", slot, e)
-        return DailyResult("stopped", slot, run=record("stopped", str(e)), reason=str(e))
+        reason = redact_amounts(str(e))
+        log.warning("daily check %s stopped: %s", slot, reason)
+        return DailyResult("stopped", slot, run=record("stopped", reason), reason=reason)
     except Exception as e:
         log.error("daily check %s failed: %s", slot, type(e).__name__)
         try:
@@ -174,4 +208,6 @@ def _from_stored(slot: str, run: run_store.RunRecord) -> DailyResult:
         day_return=data["day_return"],
         week_return=data["week_return"],
         last_close_date=date.fromisoformat(data["last_close_date"]),
+        unconfirmed=bool(data.get("unconfirmed", False)),
+        paused=bool(data.get("paused", False)),
     )

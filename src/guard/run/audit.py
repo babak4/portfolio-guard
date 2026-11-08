@@ -23,8 +23,9 @@ from guard.ingest.model import Holding
 from guard.ladder import LadderState
 from guard.run.core import CLOSES_TAIL, WeeklyComputation, WeeklyInputs
 
-# Packages whose code decides what a run advises; a change in any of them is a code change.
-_DECISION_PACKAGES = ("signals", "ladder", "advice", "guardrails", "run")
+# Packages whose code decides what a run advises, or what data it is advised from; a change in
+# any of them is a code change.
+_DECISION_PACKAGES = ("signals", "ladder", "advice", "guardrails", "run", "market", "ingest")
 
 
 def to_jsonable(value: Any) -> Any:
@@ -61,16 +62,19 @@ def inputs_hash(inputs: Any) -> str:
     return hashlib.sha256(canonical_json(inputs).encode("utf-8")).hexdigest()
 
 
-@cache
-def code_version() -> str:
-    """A fingerprint of the source files that decide advice (16 hex characters)."""
-    root = Path(__file__).resolve().parents[1]
+def _fingerprint(root: Path) -> str:
     digest = hashlib.sha256()
     for package in _DECISION_PACKAGES:
         for path in sorted((root / package).rglob("*.py")):
             digest.update(str(path.relative_to(root)).encode())
             digest.update(path.read_bytes())
     return digest.hexdigest()[:16]
+
+
+@cache
+def code_version() -> str:
+    """A fingerprint of the source files that decide advice (16 hex characters)."""
+    return _fingerprint(Path(__file__).resolve().parents[1])
 
 
 def weekly_payload(

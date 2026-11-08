@@ -79,18 +79,28 @@ def market(
     through: date | None = None,
     primary_id: str = "VWRP:XLON",
     secondary_id: str = "VT:XNYS",
+    fred_last: date | None = None,
+    fred_scale: float = 1.0,
+    secondary_last: date | None = None,
+    days_back: int = 500,
 ) -> tuple[list[FakePrices], list[FakeMacro]]:
     """Providers for a market whose last close is ``last_day`` (observations after it absent,
-    except that ``through`` extends the primary series to a later day, e.g. today)."""
-    start = last_day - timedelta(days=500)
+    except that ``through`` extends the primary series to a later day, e.g. today).
+
+    ``fred_last`` ends the FRED rate series earlier (it lags the ECB rate by days), ``fred_scale``
+    multiplies its values, ``secondary_last`` ends the second ETF earlier and ``days_back`` sets
+    how much history exists."""
+    start = last_day - timedelta(days=days_back)
     end = through or last_day
     primary = [Observation(d, dec(level(d, shock))) for d in trading_days(start, end, ("uk",))]
     secondary = [
         Observation(d, dec(level(d, secondary_shock) * 0.9 * FX))
-        for d in trading_days(start, last_day, ("us",))
+        for d in trading_days(start, secondary_last or last_day, ("us",))
     ]
     fx_a = [Observation(d, dec(FX)) for d in trading_days(start, last_day, ())]
-    fx_b = [Observation(d, dec(FX)) for d in trading_days(start, last_day, ())]
+    fx_b = [
+        Observation(d, dec(FX * fred_scale)) for d in trading_days(start, fred_last or last_day, ())
+    ]
     prices = [
         FakePrices("yahoo", {primary_id: primary, secondary_id: secondary}),
     ]
@@ -104,7 +114,9 @@ def market(
 Hook = Callable[[str], Any]
 
 
-def t212_client_factory(*, summary_isa_total: float | None = None) -> Callable[[str], Any]:
+def t212_client_factory(
+    *, summary_isa_total: float | None = None, isa_cash: Mapping[str, Any] | None = None
+) -> Callable[[str], Any]:
     """A ``client_for`` serving the Trading212 fixtures through a mock transport."""
     import httpx
 
@@ -127,6 +139,14 @@ def t212_client_factory(*, summary_isa_total: float | None = None) -> Callable[[
                 "cash": {"availableToTrade": "500.0"},
                 "investments": {},
             }
+        if account_id == "isa" and isa_cash is not None:
+            routes[f"{API}/equity/account/summary"] = {
+                "id": 1,
+                "currency": "GBP",
+                "totalValue": 16500.0,
+                "cash": dict(isa_cash),
+                "investments": {},
+            }
         return T212Client(
             "https://demo.trading212.com/api/v0",
             "key",
@@ -143,6 +163,7 @@ def make_deps(
     macro: list[FakeMacro],
     *,
     summary_isa_total: float | None = None,
+    isa_cash: Mapping[str, Any] | None = None,
     now: datetime | None = None,
 ) -> Any:
     from guard.advice import load_registry
@@ -159,7 +180,7 @@ def make_deps(
         config_version=version,
         ops=open_ops(),
         warehouse=warehouse,
-        client_for=t212_client_factory(summary_isa_total=summary_isa_total),
+        client_for=t212_client_factory(summary_isa_total=summary_isa_total, isa_cash=isa_cash),
         manual_path=None,
         price_providers=prices,
         macro_providers=macro,

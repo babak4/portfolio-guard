@@ -38,9 +38,13 @@ class Flag:
 
 @dataclass(frozen=True)
 class GuardrailCheck:
+    """One guardrail result. ``adjusted`` is set when the check passed only by changing the
+    advice (the weekly cap scaling trades down); ``detail`` says how."""
+
     name: str
     passed: bool
     detail: str
+    adjusted: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,12 +62,17 @@ class AllocationRow:
 
 @dataclass(frozen=True)
 class Sleeve:
-    """Growth and safe shares of the tactical value, now and as advised."""
+    """Growth and safe shares of the tactical value: now, as advised, and after the trades.
+
+    ``growth_after`` is the growth share once the advised trades are made (contributions not
+    counted); after the weekly cap it can differ from ``growth_advised``.
+    """
 
     growth_actual: float
     safe_actual: float
     growth_advised: float
     safe_advised: float
+    growth_after: float
 
 
 @dataclass(frozen=True)

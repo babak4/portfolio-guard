@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from decimal import Decimal
 
+import pytest
+
 from guard.advice import Advice, Trade, build_advice
 from guard.guardrails import advise, apply_guardrails
 from tests.unit.advice.helpers import holding, make_config, make_inputs
@@ -106,10 +108,36 @@ def test_contribution_plan_is_recomputed_after_cap() -> None:
 
 
 def test_equity_floor_violation_blocks() -> None:
+    # trades that cut growth to 75% of a 90% book stay blocked under an 80% floor
     cfg = make_config(ladder={"equity_floor": 0.8})
-    a = advise(make_inputs(BASE, before=0.6, after=0.6, config=cfg))
+    hs = [holding("isa", "VWRP", "900"), holding("isa", "CSH2", "100")]
+    a = advise(make_inputs(hs, before=0.9, after=0.5, config=cfg))
     assert a.status == "blocked" and a.trades == ()
     assert "equity floor" in " ".join(a.reasons)
+    assert names(a)["equity_floor"] is False
+
+
+def test_book_already_below_floor_with_no_trades_is_not_blocked() -> None:
+    cfg = make_config(ladder={"equity_floor": 0.8})
+    a = advise(make_inputs(BASE, before=0.6, after=0.6, config=cfg))
+    assert a.status == "advice"
+    assert names(a)["equity_floor"] is True
+
+
+def test_corrective_buys_below_floor_pass() -> None:
+    cfg = make_config(ladder={"equity_floor": 0.8})
+    a = advise(make_inputs(BASE, before=0.6, after=0.9, config=cfg))
+    assert a.status == "advice" and a.trades
+    assert {t.symbol for t in a.trades if t.action == "BUY"} == {"VWRP"}
+    assert names(a)["equity_floor"] is True
+    assert a.sleeve.growth_after >= a.sleeve.growth_actual
+    assert a.sleeve.growth_after < 0.8
+
+
+def test_trades_that_lower_a_below_floor_share_stay_blocked() -> None:
+    cfg = make_config(ladder={"equity_floor": 0.8})
+    a = advise(make_inputs(BASE, before=0.6, after=0.5, config=cfg))
+    assert a.status == "blocked" and a.trades == ()
     assert names(a)["equity_floor"] is False
 
 
@@ -117,3 +145,61 @@ def test_equity_floor_tolerance() -> None:
     cfg = make_config(ladder={"equity_floor": 0.6})
     a = advise(make_inputs(BASE, before=0.6, after=0.6, config=cfg))
     assert a.status == "advice"
+
+
+def test_weekly_cap_is_marked_adjusted_with_factor_in_detail() -> None:
+    hs = [holding("isa", "VWRP", "5000"), holding("gia", "VWRP", "5000")]
+    a = advise(make_inputs(hs, before=1.0, after=0.5))
+    cap = next(g for g in a.guardrails if g.name == "weekly_cap")
+    assert cap.passed is True and cap.adjusted is True
+    assert "0.3000" in cap.detail
+    others = [g for g in a.guardrails if g.name != "weekly_cap"]
+    assert all(not g.adjusted for g in others)
+
+
+def test_uncapped_advice_is_not_adjusted() -> None:
+    a = advise(make_inputs(BASE, before=0.6, after=0.6))
+    assert all(not g.adjusted for g in a.guardrails)
+
+
+def test_rebalance_gap_flag_is_recomputed_after_cap() -> None:
+    hs = [
+        holding("isa", "VWRP", "1000"),
+        holding("gia", "VWRP", "4000"),
+        holding("gia", "CSH2", "1000"),
+    ]
+    inputs = make_inputs(hs, before=0.9, after=0.5)
+    draft = build_advice(inputs)
+    assert any("16.7%" in f.message for f in draft.flags if f.kind == "rebalance_gap")
+    a = apply_guardrails(draft, inputs)
+    gaps = [f for f in a.flags if f.kind == "rebalance_gap"]
+    # cap is 15% of 6000 = 900; growth 4100 of 6000 against 3000 advised: 1100 still to move
+    assert len(gaps) == 1 and "18.3%" in gaps[0].message
+    assert a.sleeve.growth_after == pytest.approx(4100 / 6000)
+    assert a.sleeve.growth_advised == 0.5
+
+
+def test_cap_that_leaves_a_gap_adds_a_gap_flag_where_the_draft_had_none() -> None:
+    hs = [holding("isa", "VWRP", "5000"), holding("gia", "VWRP", "5000")]
+    inputs = make_inputs(hs, before=1.0, after=0.5)
+    assert not [f for f in build_advice(inputs).flags if f.kind == "rebalance_gap"]
+    a = apply_guardrails(build_advice(inputs), inputs)
+    gaps = [f for f in a.flags if f.kind == "rebalance_gap"]
+    assert len(gaps) == 1 and "35.0%" in gaps[0].message
+
+
+def test_growth_after_without_cap_is_the_post_trade_share() -> None:
+    hs = [holding("isa", "VWRP", "900"), holding("isa", "CSH2", "100")]
+    a = advise(make_inputs(hs, before=0.9, after=0.85))
+    assert a.sleeve.growth_after == pytest.approx(0.85)
+
+
+def test_buy_of_a_symbol_that_is_not_a_growth_fund_is_blocked() -> None:
+    for symbol in ("XSTR", "ZZZZ"):
+        a = bad(
+            [Trade("isa", "VWRP", "SELL", D(100)), Trade("isa", symbol, "BUY", D(100))],
+        )
+        assert a.status == "blocked", symbol
+        assert symbol in " ".join(a.reasons)
+    ok = bad([Trade("isa", "VWRP", "SELL", D(100)), Trade("isa", "CSH2", "BUY", D(100))])
+    assert ok.status == "advice"

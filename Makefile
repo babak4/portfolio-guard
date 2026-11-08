@@ -29,7 +29,7 @@ backtest-quick:  ## Phase 0 backtest, small grid (needs GUARD_DATA_DIR and MSCI 
 backtest:  ## Phase 0 backtest, full grid (needs GUARD_DATA_DIR and MSCI file)
 	uv run python -m guard.backtest.run
 
-weekly:  ## Run this week's advice now (needs GUARD_DATA_DIR; ARGS="--slot 2026-11-11 --isa-lump-sum 2000")
+weekly:  ## Run this week's advice now (needs GUARD_DATA_DIR; ARGS="--slot <a date this week> --isa-lump-sum 2000")
 	uv run python -m guard.worker run-now weekly $(ARGS)
 
 daily:  ## Run the daily light check now (needs GUARD_DATA_DIR)

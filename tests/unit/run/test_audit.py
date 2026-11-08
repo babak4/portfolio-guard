@@ -62,3 +62,18 @@ def test_non_finite_floats_and_unknown_types_are_rejected() -> None:
 def test_code_version_is_stable_text() -> None:
     assert code_version() == code_version()
     assert len(code_version()) == 16
+
+
+def test_code_version_covers_the_market_and_ingest_sources(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from guard.run import audit
+
+    assert {"market", "ingest"} <= set(audit._DECISION_PACKAGES)
+    for package in audit._DECISION_PACKAGES:
+        (tmp_path / package).mkdir()
+        (tmp_path / package / "a.py").write_text("x = 1\n")
+    before = audit._fingerprint(tmp_path)
+    (tmp_path / "market" / "a.py").write_text("x = 2\n")
+    assert audit._fingerprint(tmp_path) != before
+    (tmp_path / "market" / "a.py").write_text("x = 1\n")
+    (tmp_path / "ingest" / "a.py").write_text("x = 2\n")
+    assert audit._fingerprint(tmp_path) != before

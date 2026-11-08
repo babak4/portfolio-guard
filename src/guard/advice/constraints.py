@@ -67,10 +67,17 @@ def _available(fund: Fund, available_symbols: frozenset[str] | None) -> bool:
     return fund.available_on_t212 is True
 
 
+def _figure(fund: Fund) -> str:
+    """The fund's charge as text, marked when the figure has not been checked."""
+    assert fund.ongoing_charge is not None
+    mark = "" if fund.verified else " (unverified figure)"
+    return f"{pct(fund.ongoing_charge, 2)}{mark}"
+
+
 def _fmt_charge(fund: Fund) -> str:
     if fund.ongoing_charge is None:
         return f"{fund.symbol} (fee unknown)"
-    return f"{fund.symbol} ({pct(fund.ongoing_charge, 2)})"
+    return f"{fund.symbol} ({_figure(fund)})"
 
 
 def check_fees(
@@ -81,11 +88,13 @@ def check_fees(
 ) -> tuple[Flag, ...]:
     """Flag held funds charging more than ``ceiling``, with cheaper alternatives.
 
-    Alternatives share the fund's role and category, charge strictly less and are available on
-    Trading212 (per ``available_symbols`` when given, otherwise the registry flag; unknown means
-    not suggested). Those at or below the ceiling come first. A fund with an unknown charge gets
-    an info line saying so. Fixed satellites and unknown funds are skipped. For a safe fund
-    above the ceiling, the other money-market funds are listed as options with their charges.
+    Alternatives track the same index (same non-null ``index_group``), share the fund's role,
+    have a known charge strictly lower than the held fund's and are available on Trading212
+    (per ``available_symbols`` when given, otherwise the registry flag; unknown means not
+    suggested). Those at or below the ceiling come first. A fund with an unknown charge gets an
+    info line saying so and is never called cheap or expensive. Charges that are not verified
+    say so. Fixed satellites and unknown funds are skipped. For a safe fund above the ceiling,
+    the other money-market funds are listed as options, with a note that they may differ.
     """
     limit = Decimal(str(ceiling))
     flags: list[Flag] = []
@@ -107,10 +116,7 @@ def check_fees(
             continue
         if Decimal(str(fund.ongoing_charge)) <= limit:
             continue
-        head = (
-            f"{fund.symbol} charges {pct(fund.ongoing_charge, 2)}, above the "
-            f"{pct(ceiling, 2)} fee ceiling"
-        )
+        head = f"{fund.symbol} charges {_figure(fund)}, above the {pct(ceiling, 2)} fee ceiling"
         if fund.role == "safe":
             options = sorted(
                 (
@@ -124,8 +130,8 @@ def check_fees(
                 key=lambda f: (f.ongoing_charge is None, f.ongoing_charge or 0.0, f.symbol),
             )
             tail = (
-                "; money-market options on Trading212, your choice: "
-                + ", ".join(_fmt_charge(f) for f in options)
+                "; money-market options on Trading212, your choice (they may differ in what they "
+                "hold, so check before switching): " + ", ".join(_fmt_charge(f) for f in options)
                 if options
                 else "; no other money-market fund is confirmed available on Trading212"
             )

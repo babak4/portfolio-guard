@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 from collections.abc import Callable, Sequence
@@ -22,7 +23,15 @@ from guard.market.providers.yahoo import YahooProvider
 from guard.market.store import MarketStore
 from guard.paths import data_dir
 from guard.run.audit import code_version
+from guard.run.results import Notice
 from guard.storage import open_ops, open_warehouse
+
+log = logging.getLogger("guard.run")
+
+
+def log_notice(notice: Notice) -> None:
+    """The default notifier: a warning in the log. The alert layer replaces it."""
+    log.warning("%s %s %s: %s", notice.kind, notice.slot, notice.status, notice.message)
 
 
 @dataclass
@@ -38,6 +47,7 @@ class Deps:
     funds: Callable[[], FundRegistry]
     clock: Callable[[], datetime]
     code_version: str = field(default_factory=code_version)
+    notify: Callable[[Notice], None] = log_notice
 
     def close(self) -> None:
         self.ops.close()

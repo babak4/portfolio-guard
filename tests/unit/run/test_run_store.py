@@ -84,8 +84,22 @@ def test_last_successful_run_ignores_stopped(conn: sqlite3.Connection) -> None:
     assert last is not None and last.slot == "2026-11-04"
 
 
+def test_a_retry_updates_a_non_ok_row_even_after_a_journal_entry_points_at_it(
+    conn: sqlite3.Connection,
+) -> None:
+    _record(conn, "stopped", stop_reason="stale")
+    conn.execute(
+        "INSERT INTO decision_journal (run_id, decision, recorded_at)"
+        " VALUES ('weekly-2026-11-11', 'ignored', ?)",
+        (T0.isoformat(),),
+    )
+    ok = _record(conn, "ok", payload="x", advice="{}", ladder=(1, LadderState(0.9, 0)))
+    assert ok.status == "ok" and ok.payload == "x"
+    assert conn.execute("SELECT COUNT(*) FROM run WHERE kind='weekly'").fetchone()[0] == 1
+
+
 def test_responses_are_append_only_and_supersede(conn: sqlite3.Connection) -> None:
-    run = _record(conn)
+    run = _record(conn, advice="{}")
     first = run_store.record_response(conn, run.run_id, "followed", "did it", T0)
     second = run_store.record_response(conn, run.run_id, "changed", None, T0)
     rows = run_store.responses_for(conn, run.run_id)
@@ -94,6 +108,61 @@ def test_responses_are_append_only_and_supersede(conn: sqlite3.Connection) -> No
     assert rows[1].id == second and rows[1].supersedes == first
     with pytest.raises(sqlite3.DatabaseError):
         conn.execute("UPDATE decision_journal SET note='edited' WHERE id=?", (first,))
+
+
+def test_a_response_is_tied_to_the_hash_of_the_advice_it_answers(conn: sqlite3.Connection) -> None:
+    import hashlib
+
+    run = _record(conn, advice='{"status":"advice"}')
+    entry = run_store.record_response(conn, run.run_id, "followed", None, T0)
+    ref = conn.execute("SELECT advice_ref FROM decision_journal WHERE id=?", (entry,)).fetchone()[0]
+    assert ref == hashlib.sha256(b'{"status":"advice"}').hexdigest()
+    assert run_store.advice_ref(conn, run.run_id) == ref
+
+
+@pytest.mark.parametrize("status", ["stopped", "paused", "failed"])
+def test_only_an_ok_weekly_run_takes_a_response(conn: sqlite3.Connection, status: str) -> None:
+    run = _record(conn, status, stop_reason="x")
+    with pytest.raises(run_store.NotRespondable, match="ok weekly"):
+        run_store.record_response(conn, run.run_id, "followed", None, T0)
+
+
+def test_a_daily_run_takes_no_response(conn: sqlite3.Connection) -> None:
+    run = run_store.record_run(
+        conn, kind="daily", slot="2026-11-10", status="ok", started_at=T0, finished_at=T0
+    )
+    with pytest.raises(run_store.NotRespondable):
+        run_store.record_response(conn, run.run_id, "followed", None, T0)
+
+
+def test_advice_rows_are_append_only(conn: sqlite3.Connection) -> None:
+    run = _record(conn, advice="{}")
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        conn.execute("UPDATE advice SET payload='{\"x\":1}' WHERE run_id=?", (run.run_id,))
+    with pytest.raises(sqlite3.DatabaseError, match="append-only"):
+        conn.execute("DELETE FROM advice WHERE run_id=?", (run.run_id,))
+
+
+def test_an_ok_run_row_cannot_be_edited_or_deleted_but_a_stopped_one_can(
+    conn: sqlite3.Connection,
+) -> None:
+    ok = _record(conn, advice="{}")
+    with pytest.raises(sqlite3.DatabaseError, match="ok run"):
+        conn.execute("UPDATE run SET payload='tampered' WHERE run_id=?", (ok.run_id,))
+    with pytest.raises(sqlite3.DatabaseError, match="ok run"):
+        conn.execute("DELETE FROM run WHERE run_id=?", (ok.run_id,))
+    stopped = _record(conn, "stopped", slot="2026-11-18", stop_reason="stale")
+    conn.execute("UPDATE run SET stop_reason='again' WHERE run_id=?", (stopped.run_id,))
+
+
+def test_record_run_commits_nothing_when_paused_is_demanded_and_the_switch_is_on(
+    conn: sqlite3.Connection,
+) -> None:
+    run_store.set_paused(conn, True, T0)
+    with pytest.raises(run_store.PausedError):
+        _record(conn, advice="{}", ladder=(1, LadderState(0.9, 0)), refuse_if_paused=True)
+    assert conn.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 0
+    assert run_store.latest_ladder_state(conn) is None
 
 
 def test_response_for_unknown_run_is_rejected(conn: sqlite3.Connection) -> None:

@@ -12,7 +12,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from guard.config import read_version
+from guard.config import config_version, read_version
 from guard.run.audit import (
     canonical_json,
     code_version,
@@ -37,6 +37,7 @@ class ReplayResult:
 
     status: ReplayStatus
     diff: dict[str, dict[str, str]] = field(default_factory=dict)
+    message: str | None = None
 
 
 def replay(
@@ -49,15 +50,32 @@ def replay(
         raise ReplayError(f"run {run_id} is {run.status}; it has no advice to replay")
     stored: dict[str, Any] = json.loads(run.payload)
     config = read_version(stored["config_version"])
-    inputs = weekly_inputs_from_payload(stored, config)
-    recomputed = weekly_payload(
-        inputs,
-        compute_weekly(inputs),
-        slot=stored["slot"],
-        config_version=stored["config_version"],
-        code=stored["code_version"],
-        sources=tuple(stored["inputs"]["sources"]),
-    )
+    actual = config_version(config)
+    if actual != stored["config_version"]:
+        message = (
+            f"the archived configuration {stored['config_version']} does not match its version "
+            f"hash (it hashes to {actual})"
+        )
+        return ReplayResult(
+            "different",
+            {"config_version": {"stored": stored["config_version"], "recomputed": actual}},
+            message,
+        )
+    try:
+        inputs = weekly_inputs_from_payload(stored, config)
+        recomputed = weekly_payload(
+            inputs,
+            compute_weekly(inputs),
+            slot=stored["slot"],
+            config_version=stored["config_version"],
+            code=stored["code_version"],
+            sources=tuple(stored["inputs"]["sources"]),
+        )
+    except Exception as e:  # noqa: BLE001 - old records meeting new code must report, not crash
+        message = f"the stored run cannot be rebuilt by the current code: {type(e).__name__}: {e}"
+        return ReplayResult(
+            "code_changed", {"rebuild": {"stored": "", "recomputed": message}}, message
+        )
 
     diff: dict[str, dict[str, str]] = {}
     for part in _COMPARED:

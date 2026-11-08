@@ -15,7 +15,9 @@ from apscheduler.triggers.cron import CronTrigger
 from guard.config.models import Schedule
 from guard.ingest.snapshot_job import daily_trigger, run_snapshot
 from guard.run.daily import run_daily
-from guard.run.deps import Deps
+from guard.run.deps import Deps, log_notice
+from guard.run.redact import redact_amounts
+from guard.run.results import DailyResult, Notice, RunResult
 from guard.run.weekly import run_weekly
 
 log = logging.getLogger("guard.worker")
@@ -24,8 +26,8 @@ WEEKLY_JOB = "weekly-advice"
 DAILY_JOB = "daily-check"
 SNAPSHOT_JOB = "daily-snapshot"
 
-# A job that missed its time (the host was off) still runs if it is late by less than this. The
-# weekly slot is the local date, so it must start before midnight; the others likewise.
+# A job that missed its time (the host was off) still runs if it is late by less than this: the
+# same day, so the daily jobs answer the day they were meant for.
 _DAY = 24 * 3600
 
 DepsSource = Deps | Callable[[], Deps]
@@ -60,16 +62,42 @@ def _deps(source: DepsSource) -> Any:
         deps.close()
 
 
-def _guarded(
-    name: str, source: DepsSource, job: Callable[[Deps, datetime], object]
+def _notices(kind: str, outcome: object) -> list[Notice]:
+    """What the owner must be told about a finished job: a run that did not complete, or the
+    events of a daily check. Reasons are already free of amounts."""
+    if isinstance(outcome, RunResult) and outcome.status in ("stopped", "failed", "locked"):
+        return [Notice(kind, outcome.status, outcome.slot, outcome.reason or outcome.status)]
+    if isinstance(outcome, DailyResult):
+        if outcome.status in ("stopped", "failed", "locked"):
+            return [Notice(kind, outcome.status, outcome.slot, outcome.reason or outcome.status)]
+        return [Notice(kind, "event", outcome.slot, e.message) for e in outcome.events]
+    return []
+
+
+def guarded(
+    name: str, kind: str, source: DepsSource, job: Callable[[Deps, datetime], object]
 ) -> Callable[[], None]:
+    """A scheduler job that never raises. Stopped, failed and locked runs and daily events go to
+    ``deps.notify`` so they are alerts, not just log lines."""
+
     def fire() -> None:
+        notify = log_notice
         try:
             with _deps(source) as deps:
+                notify = deps.notify
                 outcome = job(deps, datetime.now(UTC))
             log.info("%s finished: %s", name, getattr(outcome, "status", outcome))
+            pending = _notices(kind, outcome)
         except Exception as e:  # noqa: BLE001 - the scheduler must keep running
             log.error("%s failed: %s", name, type(e).__name__)
+            pending = [
+                Notice(kind, "failed", "", f"{name} failed: {redact_amounts(type(e).__name__)}")
+            ]
+        for notice in pending:
+            try:
+                notify(notice)
+            except Exception as e:  # noqa: BLE001 - a broken alert path must not stop the jobs
+                log.error("could not deliver a %s notice: %s", notice.status, type(e).__name__)
 
     return fire
 
@@ -91,21 +119,21 @@ def build_scheduler(source: DepsSource, schedule: Schedule | None = None) -> Blo
     scheduler = BlockingScheduler(timezone=ZoneInfo(schedule.timezone))
     options: dict[str, Any] = {"coalesce": True, "max_instances": 1}
     scheduler.add_job(
-        _guarded("weekly run", source, run_weekly),
+        guarded("weekly run", "weekly", source, run_weekly),
         weekly_trigger(schedule),
         id=WEEKLY_JOB,
         misfire_grace_time=_until_midnight(schedule.weekly_time),
         **options,
     )
     scheduler.add_job(
-        _guarded("daily check", source, run_daily),
+        guarded("daily check", "daily", source, run_daily),
         daily_trigger(schedule),
         id=DAILY_JOB,
         misfire_grace_time=_until_midnight(schedule.daily_check_time),
         **options,
     )
     scheduler.add_job(
-        _guarded("snapshot", source, _snapshot),
+        guarded("snapshot", "snapshot", source, _snapshot),
         daily_trigger(schedule),
         id=SNAPSHOT_JOB,
         misfire_grace_time=_until_midnight(schedule.daily_check_time),

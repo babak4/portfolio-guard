@@ -1,15 +1,17 @@
 """The weekly run: collect, check, compute and store the advice in one go.
 
-Nothing is stored until everything has succeeded. A data-integrity problem records a ``stopped``
-run (no ladder move, no advice) and returns it so the caller can alert; any other error records
-``failed`` and is re-raised.
+The slot is the Monday of the local ISO week, so a week has one slot and one ladder move however
+many days the run is tried on. Nothing is stored until everything has succeeded. A
+data-integrity problem records a ``stopped`` run (no ladder move, no advice) and returns it so the
+caller can alert; any other error records ``failed`` and is re-raised.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, cast
 from zoneinfo import ZoneInfo
@@ -25,6 +27,7 @@ from guard.run.audit import canonical_json, inputs_hash, weekly_payload
 from guard.run.core import WeeklyInputs, compute_weekly, week_number
 from guard.run.deps import Deps
 from guard.run.live_series import build_live_levels
+from guard.run.redact import redact_amounts
 from guard.run.results import RunResult
 from guard.storage import run_store, writer_lock
 from guard.storage.ingest_store import store_raw_history, write_snapshot
@@ -33,6 +36,25 @@ log = logging.getLogger("guard.run")
 
 KIND = "weekly"
 LOCK_WAIT_SECONDS = 30.0
+NO_HISTORY = "not enough price history for the signals"
+PAUSED = "paused by the owner"
+
+
+class SlotError(ValueError):
+    """The requested slot is not in the current ISO week."""
+
+
+def slot_for(local_today: date, requested: date | None = None) -> date:
+    """The weekly slot: the Monday of the ISO week of ``local_today``. A ``requested`` date is
+    accepted only inside that week (and maps to the same Monday)."""
+    monday = local_today - timedelta(days=local_today.weekday())
+    sunday = monday + timedelta(days=6)
+    if requested is not None and not monday <= requested <= sunday:
+        raise SlotError(
+            f"slot {requested} is not in the current week ({monday} to {sunday}); "
+            "only the current week can be run"
+        )
+    return monday
 
 
 @dataclass
@@ -56,9 +78,10 @@ class _InstrumentRecorder:
 def run_weekly(
     deps: Deps, now: datetime, *, isa_lump_sum: Decimal = Decimal(0), slot: date | None = None
 ) -> RunResult:
-    """Run the weekly advice for ``slot`` (default: the local date of ``now``)."""
+    """Run the weekly advice for the current ISO week. ``slot`` may name any day of that week;
+    a day of another week raises ``SlotError``."""
     local_today = now.astimezone(ZoneInfo(deps.config.schedule.timezone)).date()
-    slot_day = slot or local_today
+    slot_day = slot_for(local_today, slot)
     with writer_lock("run", wait_seconds=LOCK_WAIT_SECONDS) as acquired:
         if not acquired:
             return RunResult("locked", KIND, slot_day.isoformat(), reason="another run is active")
@@ -71,8 +94,6 @@ def _locked(
     slot = slot_day.isoformat()
     conn = deps.ops
     existing = run_store.get_run_for_slot(conn, KIND, slot)
-    if existing is not None and existing.status == "ok":
-        return RunResult("ok", KIND, slot, run=existing)
 
     def record(
         status: run_store.RunStatus, reason: str | None, **extra: Any
@@ -91,13 +112,21 @@ def _locked(
         )
 
     if run_store.get_paused(conn):
-        return RunResult("paused", KIND, slot, run=record("paused", "paused by the owner"))
+        if existing is not None and existing.status == "ok":
+            # The stored advice stays as it is, but a paused system does not show it.
+            return RunResult("paused", KIND, slot, reason=PAUSED)
+        return RunResult("paused", KIND, slot, run=record("paused", PAUSED), reason=PAUSED)
+    if existing is not None and existing.status == "ok":
+        return RunResult("ok", KIND, slot, run=existing, last_close_date=_as_of(existing))
 
     try:
         return _compute_and_store(deps, now, today, slot_day, isa_lump_sum, record)
+    except run_store.PausedError:
+        return RunResult("paused", KIND, slot, run=record("paused", PAUSED), reason=PAUSED)
     except (DataIntegrityError, IngestIntegrityError) as e:
-        log.warning("weekly run %s stopped: %s", slot, e)
-        return RunResult("stopped", KIND, slot, run=record("stopped", str(e)), reason=str(e))
+        reason = redact_amounts(str(e))
+        log.warning("weekly run %s stopped: %s", slot, reason)
+        return RunResult("stopped", KIND, slot, run=record("stopped", reason), reason=reason)
     except Exception as e:
         log.error("weekly run %s failed: %s", slot, type(e).__name__)
         try:
@@ -105,6 +134,15 @@ def _locked(
         except Exception:  # noqa: BLE001 - never hide the original error
             log.exception("could not record the failed run")
         raise
+
+
+def _as_of(run: run_store.RunRecord) -> date | None:
+    """The last close date a stored weekly run was computed from."""
+    try:
+        days = json.loads(run.payload or "{}")["inputs"]["closes"]["days"]
+        return date.fromisoformat(days[-1])
+    except KeyError, IndexError, ValueError:
+        return None
 
 
 def _collect(
@@ -135,7 +173,9 @@ def _compute_and_store(
     slot = slot_day.isoformat()
     snapshots, history, available = _collect(deps, now, today)
     holdings: tuple[Holding, ...] = tuple(h for s in snapshots for h in s.holdings)
-    cash = {s.account_id: s.cash for s in snapshots}
+    cash = {
+        s.account_id: s.cash if s.spendable_cash is None else s.spendable_cash for s in snapshots
+    }
 
     live = build_live_levels(
         cfg, deps.price_providers, deps.macro_providers, MarketStore(deps.warehouse), today
@@ -162,6 +202,11 @@ def _compute_and_store(
         available_symbols=available,
     )
     result = compute_weekly(inputs)
+    if result.decision.kind == "data_gap":
+        log.warning("weekly run %s stopped: %s", slot, NO_HISTORY)
+        return RunResult(
+            "stopped", KIND, slot, run=record("stopped", NO_HISTORY), reason=NO_HISTORY
+        )
     payload = weekly_payload(
         inputs,
         result,
@@ -172,7 +217,10 @@ def _compute_and_store(
     )
 
     # Everything succeeded: now store. Snapshots and raw history are idempotent facts; the run
-    # row, new ladder state and advice commit together.
+    # row, new ladder state and advice commit together. The pause switch is read again here and
+    # once more inside that transaction, since the owner may have paused during a long run.
+    if run_store.get_paused(deps.ops):
+        raise run_store.PausedError(slot)
     for snap in snapshots:
         write_snapshot(deps.ops, snap)
     for account_id, kinds in history.items():
@@ -185,5 +233,14 @@ def _compute_and_store(
         payload=canonical_json(payload),
         advice=canonical_json(payload["advice"]),
         ladder=(week, result.state_after),
+        refuse_if_paused=True,
     )
-    return RunResult("ok", KIND, slot, run=stored, advice=result.advice, decision=result.decision)
+    return RunResult(
+        "ok",
+        KIND,
+        slot,
+        run=stored,
+        advice=result.advice,
+        decision=result.decision,
+        last_close_date=live.last_close_date,
+    )

@@ -90,3 +90,97 @@ def test_no_primary_data_stops(store: MarketStore) -> None:
     prices[0].fail = True
     with pytest.raises(DataIntegrityError):
         build_live_levels(cfg, prices, macro, store, TODAY)
+
+
+# --- the FX series: Frankfurter, compared with FRED on the dates both have -------------------
+
+
+def test_fred_lagging_the_ecb_rate_by_days_still_passes(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST, fred_last=date(2026, 11, 5))  # FRED ends 5 days earlier
+    live = build_live_levels(cfg, prices, macro, store, TODAY)
+    assert live.last_close_date == LAST
+    assert live.sources[2] == "frankfurter+fred"
+
+
+def test_fx_sources_that_disagree_on_a_shared_date_stop_and_name_both(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST, fred_scale=1.02, fred_last=date(2026, 11, 5))
+    with pytest.raises(DataIntegrityError) as exc:
+        build_live_levels(cfg, prices, macro, store, TODAY)
+    assert "frankfurter" in str(exc.value) and "fred" in str(exc.value)
+    assert store.load("VWRP:XLON") == []
+
+
+def test_fx_sources_with_no_shared_date_in_the_last_15_days_stop(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST, fred_last=date(2026, 10, 20))
+    with pytest.raises(DataIntegrityError) as exc:
+        build_live_levels(cfg, prices, macro, store, TODAY)
+    assert "frankfurter" in str(exc.value) and "fred" in str(exc.value)
+
+
+# --- no lag allowance on the live series ------------------------------------------------------
+
+
+def test_a_primary_one_trading_day_behind_stops(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    assert cfg.data.stale_trading_days >= 1  # the shared rule still allows lag elsewhere
+    prices, macro = market(date(2026, 11, 9))  # Monday's close on a Wednesday run
+    with pytest.raises(StaleDataError):
+        build_live_levels(cfg, prices, macro, store, TODAY)
+
+
+def test_a_secondary_one_trading_day_behind_stops(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST, secondary_last=date(2026, 11, 9))
+    with pytest.raises(StaleDataError):
+        build_live_levels(cfg, prices, macro, store, TODAY)
+
+
+def test_a_required_close_that_is_missing_says_it_is_not_available_yet(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST)
+    with pytest.raises(DataIntegrityError, match="today's close is not available yet"):
+        build_live_levels(cfg, prices, macro, store, TODAY, required_close=TODAY)
+
+
+# --- minimum history --------------------------------------------------------------------------
+
+
+def test_too_few_closes_for_the_signals_stops_the_weekly_series(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST, days_back=120)  # about 80 closes; the drawdown needs 260
+    with pytest.raises(DataIntegrityError, match="history"):
+        build_live_levels(cfg, prices, macro, store, TODAY)
+    assert store.load("VWRP:XLON") == []
+
+
+def test_the_daily_series_needs_only_the_volatility_window_and_a_week(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST, days_back=120)
+    live = build_live_levels(cfg, prices, macro, store, TODAY, history="daily")
+    assert len(live.levels) < 260
+    prices, macro = market(LAST, days_back=12)  # about 8 closes: under the 21 the volatility needs
+    with pytest.raises(DataIntegrityError, match="history"):
+        build_live_levels(cfg, prices, macro, store, TODAY, history="daily")
+
+
+# --- the return cross-check can be advisory ---------------------------------------------------
+
+
+def test_an_advisory_disagreement_does_not_raise_and_marks_the_series_unconfirmed(
+    store: MarketStore,
+) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST, secondary_shock={date(2026, 11, 5): 0.95})
+    live = build_live_levels(cfg, prices, macro, store, TODAY, returns_check="advisory")
+    assert live.unconfirmed is True and live.unconfirmed_note
+    assert store.load("VWRP:XLON") == []  # an unconfirmed series is not stored
+
+
+def test_an_agreeing_advisory_check_is_confirmed(store: MarketStore) -> None:
+    cfg, _ = load_config()
+    prices, macro = market(LAST)
+    live = build_live_levels(cfg, prices, macro, store, TODAY, returns_check="advisory")
+    assert live.unconfirmed is False and live.unconfirmed_note is None

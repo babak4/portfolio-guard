@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 from guard.advice import Advice, Trade, build_advice
 
-from .helpers import holding, make_config, make_inputs
+from .helpers import holding, make_config, make_inputs, registry
 
 
 def D(x: int | str) -> Decimal:
@@ -248,7 +249,7 @@ def test_trades_below_minimum_are_dropped() -> None:
     assert build_advice(inputs).trades == ()
 
 
-def test_unknown_fund_is_flagged_and_not_traded() -> None:
+def test_unknown_fund_is_flagged_and_blocks_advice() -> None:
     inputs = make_inputs(
         [
             holding("isa", "VWRP", "800"),
@@ -259,7 +260,7 @@ def test_unknown_fund_is_flagged_and_not_traded() -> None:
         after=0.6,
     )
     a = build_advice(inputs)
-    assert all(t.symbol != "ZZZZ" for t in a.trades)
+    assert a.status == "blocked" and a.trades == () and a.contribution_plan == ()
     assert any(f.kind == "unknown_fund" for f in a.flags)
 
 
@@ -272,12 +273,16 @@ def test_flags_from_constraints_are_included() -> None:
 
 
 def test_available_symbols_reach_the_fee_check() -> None:
+    # VWRP at 0.25% has the same-index VWCE as a cheaper, available alternative
+    funds = registry()
+    pricey = replace(funds.get("VWRP"), ongoing_charge=0.0025)  # type: ignore[type-var]
     inputs = make_inputs(
-        [holding("isa", "XDEW", "900"), holding("isa", "CSH2", "100")],
-        available=frozenset({"VUAG"}),
+        [holding("isa", "VWRP", "900"), holding("isa", "CSH2", "100")],
+        available=frozenset({"VWCE"}),
+        funds=type(funds)({**funds.by_symbol, "VWRP": pricey}),
     )
     msgs = " ".join(flag_messages(build_advice(inputs)))
-    assert "VUAG" in msgs
+    assert "VWCE" in msgs
 
 
 def test_allocation_rows() -> None:

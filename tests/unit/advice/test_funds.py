@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from guard.advice.fund_registry import FundFileError, load_registry, packaged_registry
-from guard.advice.funds import symbol_of
+from guard.advice.funds import FundRegistry, symbol_of
 
 
 @pytest.mark.parametrize(
@@ -78,9 +79,51 @@ def test_data_dir_override_is_picked_up(data_dir: Path) -> None:
     assert load_registry().get("VWRP").ongoing_charge == 0.005  # type: ignore[union-attr]
 
 
-def test_alternatives_same_category_and_cheaper() -> None:
+def test_alternatives_need_same_index_group_and_known_lower_charges() -> None:
     reg = packaged_registry()
-    alts = [f.symbol for f in reg.alternatives(reg.get("VWRP"))]  # type: ignore[arg-type]
-    assert alts == []  # VWCE has the same charge; VHVG/ACWI unknown
-    alts = [f.symbol for f in reg.alternatives(reg.get("XDEW"))]  # type: ignore[arg-type]
-    assert alts == ["VUAG"]
+    # the seeds carry no cheaper like-for-like fund: VWCE costs the same as VWRP, VUAG tracks
+    # a different index from XDEW
+    assert reg.alternatives(reg.get("VWRP")) == ()  # type: ignore[arg-type]
+    assert reg.alternatives(reg.get("XDEW")) == ()  # type: ignore[arg-type]
+    pricey = replace(reg.get("VWRP"), ongoing_charge=0.0025)  # type: ignore[type-var]
+    assert [f.symbol for f in reg.alternatives(pricey)] == ["VWCE"]
+
+
+def test_alternatives_exclude_other_index_unknown_charge_and_null_group() -> None:
+    reg = packaged_registry()
+    base = reg.get("VWRP")
+    assert base is not None
+    other_index = replace(base, symbol="OTHR", index_group="msci-acwi", ongoing_charge=0.0001)
+    unknown_charge = replace(base, symbol="UNKN", ongoing_charge=None)
+    no_group = replace(base, symbol="NOGR", index_group=None, ongoing_charge=0.0001)
+    safe = replace(base, symbol="SAFE", role="safe", ongoing_charge=0.0001)
+    custom = FundRegistry(
+        {f.symbol: f for f in (base, other_index, unknown_charge, no_group, safe)}
+    )
+    held = replace(base, ongoing_charge=0.0025)
+    assert custom.alternatives(held) == ()
+    # a fund without a group has no like-for-like alternatives, even from another null group
+    ungrouped = replace(held, index_group=None)
+    assert custom.alternatives(ungrouped) == ()
+    # an unknown charge on the held fund yields none either
+    assert custom.alternatives(replace(base, ongoing_charge=None)) == ()
+
+
+def test_seed_index_groups() -> None:
+    reg = packaged_registry()
+    want = {
+        "VWRP": "ftse-all-world",
+        "VWCE": "ftse-all-world",
+        "VHVG": "ftse-developed",
+        "ACWI": "msci-acwi",
+        "VUAG": "sp500",
+        "XDEW": "sp500-equal-weight",
+        "CUKX": "ftse-100",
+        "VMID": "ftse-250",
+        "VERG": "ftse-developed-europe",
+        "CSH2": "gbp-money-market",
+        "XSTR": "gbp-money-market",
+    }
+    for symbol, group in want.items():
+        assert reg.get(symbol).index_group == group  # type: ignore[union-attr]
+    assert reg.get("BRK.B").index_group is None  # type: ignore[union-attr]

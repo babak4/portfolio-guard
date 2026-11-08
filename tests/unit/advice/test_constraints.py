@@ -43,40 +43,86 @@ def test_us_only_empty_portfolio() -> None:
     assert check_us_only([], registry(), 0.5) is None
 
 
-def test_fee_above_ceiling_suggests_available_cheaper_alternative() -> None:
-    # XDEW (0.20%) held, VUAG (0.07%) is cheaper and in the instruments list
-    hs = [holding("isa", "XDEW", 1000)]
-    flags = check_fees(hs, registry(), 0.0015, frozenset({"VUAG"}))
+def reg_with(**changes: dict[str, object]):  # type: ignore[no-untyped-def]
+    reg = registry()
+    funds = dict(reg.by_symbol)
+    for symbol, fields in changes.items():
+        funds[symbol] = replace(funds[symbol], **fields)
+    return type(reg)(funds)
+
+
+def test_fee_above_ceiling_suggests_available_equivalent_alternative() -> None:
+    # VWRP at 0.25% held; VWCE (0.19%) tracks the same index and is in the instruments list
+    reg = reg_with(VWRP={"ongoing_charge": 0.0025})
+    hs = [holding("isa", "VWRP", 1000)]
+    flags = check_fees(hs, reg, 0.0015, frozenset({"VWCE", "VUAG"}))
     warn = [f for f in flags if f.severity == "warn"]
     assert len(warn) == 1
-    assert "XDEW" in warn[0].message and "0.20%" in warn[0].message
-    assert "0.15%" in warn[0].message and "VUAG" in warn[0].message
-    assert "VUAG" in warn[0].symbols
+    assert "VWRP" in warn[0].message and "0.25%" in warn[0].message
+    assert "0.15%" in warn[0].message and "VWCE" in warn[0].message
+    assert "VUAG" not in warn[0].message
+    assert "VWCE" in warn[0].symbols
 
 
-def test_fee_022_percent_with_alternative_missing_from_available_not_suggested() -> None:
-    reg = registry()
-    xdew = replace(reg.get("XDEW"), ongoing_charge=0.0022)  # type: ignore[type-var]
-    reg2 = type(reg)({**reg.by_symbol, "XDEW": xdew})
+def test_other_index_is_never_offered_as_a_cheaper_alternative() -> None:
     hs = [holding("isa", "XDEW", 1000)]
-    flags = check_fees(hs, reg2, 0.0015, frozenset({"VUAG"}))
-    w = next(f for f in flags if f.severity == "warn")
-    assert "0.22%" in w.message and "VUAG" in w.message
-    flags = check_fees(hs, reg2, 0.0015, frozenset({"SOMETHING"}))
-    w = next(f for f in flags if f.severity == "warn")
+    w = next(
+        f for f in check_fees(hs, registry(), 0.0015, frozenset({"VUAG"})) if f.severity == "warn"
+    )
     assert "VUAG" not in w.message and "no cheaper" in w.message
 
 
-def test_fee_availability_falls_back_to_registry_flag() -> None:
-    reg = registry()
-    vuag = replace(reg.get("VUAG"), available_on_t212=True)  # type: ignore[type-var]
-    reg2 = type(reg)({**reg.by_symbol, "VUAG": vuag})
-    hs = [holding("isa", "XDEW", 1000)]
-    w = next(f for f in check_fees(hs, reg2, 0.0015, None) if f.severity == "warn")
-    assert "VUAG" in w.message
-    # unknown flag and no instrument list: not suggested
-    w = next(f for f in check_fees(hs, registry(), 0.0015, None) if f.severity == "warn")
-    assert "VUAG" not in w.message
+def test_alternative_availability_is_unchanged() -> None:
+    reg = reg_with(VWRP={"ongoing_charge": 0.0025})
+    hs = [holding("isa", "VWRP", 1000)]
+    w = next(
+        f for f in check_fees(hs, reg, 0.0015, frozenset({"SOMETHING"})) if f.severity == "warn"
+    )
+    assert "VWCE" not in w.message and "no cheaper" in w.message
+    reg = reg_with(VWRP={"ongoing_charge": 0.0025}, VWCE={"available_on_t212": True})
+    w = next(f for f in check_fees(hs, reg, 0.0015, None) if f.severity == "warn")
+    assert "VWCE" in w.message
+    w = next(
+        f
+        for f in check_fees(hs, reg_with(VWRP={"ongoing_charge": 0.0025}), 0.0015, None)
+        if f.severity == "warn"
+    )
+    assert "VWCE" not in w.message
+
+
+def test_unverified_figures_are_labelled_in_fee_messages() -> None:
+    reg = reg_with(VWRP={"ongoing_charge": 0.0025})
+    hs = [holding("isa", "VWRP", 1000)]
+    w = next(f for f in check_fees(hs, reg, 0.0015, frozenset({"VWCE"})) if f.severity == "warn")
+    assert w.message.count("(unverified figure)") == 2  # the held fund and the alternative
+    verified = reg_with(VWRP={"ongoing_charge": 0.0025, "verified": True}, VWCE={"verified": True})
+    w = next(
+        f for f in check_fees(hs, verified, 0.0015, frozenset({"VWCE"})) if f.severity == "warn"
+    )
+    assert "unverified" not in w.message
+
+
+def test_null_charge_is_never_presented_as_cheap_or_expensive() -> None:
+    reg = reg_with(VWRP={"ongoing_charge": 0.0025}, VWCE={"ongoing_charge": None})
+    hs = [holding("isa", "VWRP", 1000)]
+    w = next(f for f in check_fees(hs, reg, 0.0015, frozenset({"VWCE"})) if f.severity == "warn")
+    assert "VWCE" not in w.message
+    # a held fund with a null charge is an info line that makes no claim about cost
+    info = check_fees([holding("isa", "VWCE", 1000)], reg, 0.0015, frozenset({"VWRP"}))
+    assert [f.severity for f in info] == ["info"]
+    assert "above" not in info[0].message and "cheaper" not in info[0].message
+
+
+def test_safe_asset_options_may_differ_and_say_so() -> None:
+    reg = reg_with(
+        CSH2={"ongoing_charge": 0.0020, "index_group": "gbp-money-market"},
+        XSTR={"index_group": "other-money-market"},
+    )
+    flags = check_fees([holding("isa", "CSH2", 500)], reg, 0.0015, frozenset({"XSTR"}))
+    w = next(f for f in flags if f.severity == "warn")
+    assert "XSTR" in w.message and "your choice" in w.message
+    assert "differ" in w.message
+    assert "(unverified figure)" in w.message or "fee unknown" in w.message
 
 
 def test_fee_unknown_is_info() -> None:

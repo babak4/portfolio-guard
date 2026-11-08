@@ -108,13 +108,18 @@ def test_advice_invariants(inputs: AdviceInputs) -> None:
         else:
             assert placed[account] == amount.to_integral_value()
 
-    # resulting growth share respects the floor
+    # the resulting growth share respects the floor, or does not fall below where it started
     growth = Decimal(0)
     total = Decimal(0)
+    growth_before = Decimal(0)
+    total_before = Decimal(0)
     for (account, s), value in held.items():
         fund = funds.get(s)
         if fund is None or s in excluded:
             continue
+        total_before += value
+        if fund.role == "growth":
+            growth_before += value
         delta = sum(
             (t.amount if t.action == "BUY" else -t.amount)
             for t in a.trades
@@ -130,4 +135,6 @@ def test_advice_invariants(inputs: AdviceInputs) -> None:
             if funds.get(t.symbol).role == "growth":  # type: ignore[union-attr]
                 growth += t.amount
     if total > 0:
-        assert growth / total >= Decimal(str(inputs.config.ladder.equity_floor)) - Decimal("1e-9")
+        tol = Decimal("1e-9")
+        floor = Decimal(str(inputs.config.ladder.equity_floor))
+        assert growth / total >= floor - tol or growth / total >= growth_before / total_before - tol

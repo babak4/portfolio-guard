@@ -8,7 +8,8 @@ import pytest
 from apscheduler.triggers.cron import CronTrigger
 
 from guard.config import load_config
-from guard.worker.schedule import DAILY_JOB, SNAPSHOT_JOB, WEEKLY_JOB, build_scheduler
+from guard.run.results import DailyEvent, DailyResult, Notice, RunResult
+from guard.worker.schedule import DAILY_JOB, SNAPSHOT_JOB, WEEKLY_JOB, build_scheduler, guarded
 from tests.unit.run.fakes import make_deps, market
 
 LONDON = ZoneInfo("Europe/London")
@@ -59,7 +60,7 @@ def test_three_jobs_with_misfire_coalesce_and_single_instance(scheduler) -> None
     for job in jobs.values():
         assert job.coalesce is True and job.max_instances == 1
         assert job.misfire_grace_time is not None and job.misfire_grace_time >= 3600
-    # the weekly slot is the local date, so a late start must still be before midnight
+    # a late start must still be in the same ISO week; the grace stays within the day
     assert jobs[WEEKLY_JOB].misfire_grace_time == 12 * 3600
     assert jobs[DAILY_JOB].misfire_grace_time == int(1.5 * 3600)
     daily = _fire_times(jobs[DAILY_JOB].trigger, datetime(2026, 11, 9, 23, tzinfo=LONDON), 1)[0]
@@ -69,3 +70,64 @@ def test_three_jobs_with_misfire_coalesce_and_single_instance(scheduler) -> None
 def test_scheduler_uses_the_configured_timezone(scheduler) -> None:  # type: ignore[no-untyped-def]
     assert str(scheduler.timezone) == "Europe/London"
     assert load_config()[0].schedule.weekly_weekday == "wednesday"
+
+
+def _fire(data_dir: Path, kind: str, job, notices: list[Notice]) -> None:  # type: ignore[no-untyped-def]
+    prices, macro = market(datetime(2026, 11, 10).date())
+    deps = make_deps(prices, macro)
+    deps.notify = notices.append
+    guarded(f"{kind} job", kind, deps, job)()
+    deps.close()
+
+
+@pytest.mark.parametrize("status", ["stopped", "locked"])
+def test_a_stopped_or_locked_run_is_announced(data_dir: Path, status: str) -> None:
+    got: list[Notice] = []
+    _fire(
+        data_dir,
+        "weekly",
+        lambda d, n: RunResult(status, "weekly", "2026-11-09", reason="why"),
+        got,
+    )
+    assert got == [Notice("weekly", status, "2026-11-09", "why")]
+
+
+def test_a_failed_job_is_announced_without_its_message(data_dir: Path) -> None:
+    got: list[Notice] = []
+
+    def boom(deps, now):  # type: ignore[no-untyped-def]
+        raise RuntimeError("balance 12345.67")
+
+    _fire(data_dir, "snapshot", boom, got)
+    assert len(got) == 1 and got[0].kind == "snapshot" and got[0].status == "failed"
+    assert "RuntimeError" in got[0].message and "12345" not in got[0].message
+
+
+def test_each_daily_event_is_announced_and_a_quiet_day_is_not(data_dir: Path) -> None:
+    events = (
+        DailyEvent("day_drop", "The market fell 5.1% in a day.", False),
+        DailyEvent("volatility", "Volatility is 30%.", False),
+    )
+    got: list[Notice] = []
+    _fire(data_dir, "daily", lambda d, n: DailyResult("ok", "2026-11-10", events=events), got)
+    assert [(n.kind, n.status, n.message) for n in got] == [
+        ("daily", "event", "The market fell 5.1% in a day."),
+        ("daily", "event", "Volatility is 30%."),
+    ]
+    quiet: list[Notice] = []
+    _fire(data_dir, "daily", lambda d, n: DailyResult("ok", "2026-11-10"), quiet)
+    _fire(data_dir, "weekly", lambda d, n: RunResult("ok", "weekly", "2026-11-09"), quiet)
+    _fire(data_dir, "weekly", lambda d, n: RunResult("paused", "weekly", "2026-11-09"), quiet)
+    assert quiet == []
+
+
+def test_a_notifier_that_raises_does_not_stop_the_scheduler(data_dir: Path) -> None:
+    prices, macro = market(datetime(2026, 11, 10).date())
+    deps = make_deps(prices, macro)
+
+    def broken(_notice: Notice) -> None:
+        raise OSError("push service down")
+
+    deps.notify = broken
+    guarded("weekly job", "weekly", deps, lambda d, n: RunResult("stopped", "weekly", "s"))()
+    deps.close()
