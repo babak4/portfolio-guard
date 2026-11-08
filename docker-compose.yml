@@ -24,7 +24,7 @@ services:
     cpus: 1.0
     pids_limit: 200
     healthcheck:
-      test: ["CMD", "python", "-m", "guard.worker", "status"]
+      test: ["CMD", "python", "-m", "guard.worker", "status", "--check"]
       interval: 5m
       timeout: 30s
       retries: 2

@@ -24,6 +24,7 @@ from guard.notify.deliver import (
     deliver,
 )
 from guard.notify.render import render_test
+from guard.readapi.status import status_view
 from guard.run.daily import run_daily
 from guard.run.deps import Deps, default_deps
 from guard.run.redact import redact_amounts
@@ -53,7 +54,12 @@ def _parser() -> argparse.ArgumentParser:
     now.add_argument("--isa-lump-sum", default="0", help="weekly only: ISA money to place, in GBP")
     sub.add_parser("pause", help="stop all advice until resumed")
     sub.add_parser("resume", help="allow advice again")
-    sub.add_parser("status", help="pause switch and the last successful run of each job")
+    status = sub.add_parser("status", help="pause switch and the last successful run of each job")
+    status.add_argument(
+        "--check",
+        action="store_true",
+        help="exit 1 when this week's advice is overdue (a container healthcheck)",
+    )
     sub.add_parser("test-alert", help="send a test message through the real alert channels")
     respond = sub.add_parser("respond", help="record what you did with a piece of advice")
     respond.add_argument("run_id")
@@ -185,6 +191,11 @@ def main(
         if args.command == "status":
             print(format_status(build_status(deps.ops, now)), file=out)
             print(_alert_status(deps.ops), file=out)
+            if args.check:
+                view = status_view(deps.ops, deps.config, now)
+                if view.weekly_overdue:
+                    print(view.warning or "this week's advice is overdue", file=out)
+                    return EXIT_FAILED
             return EXIT_OK
         if args.command == "test-alert":
             return _test_alert(deps, now, out, sender)
