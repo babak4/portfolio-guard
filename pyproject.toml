@@ -24,6 +24,7 @@ dev = [
   "mypy>=1.11",
   "types-PyYAML",
   "pandas-stubs",
+  "pre-commit>=4.7.0",
 ]
 
 [project.optional-dependencies]

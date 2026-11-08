@@ -112,7 +112,11 @@ uv run ruff check src tests                                            # lint
 uv run mypy src/guard                                                  # types
 ```
 
-A change is done when all three are clean.
+A change is done when all three are clean. `make check` runs all three; `make help` lists every local
+command (setup, hooks, tests, snapshot, backtest).
+
+Install the git hooks once with `make hooks`. Commits run ruff and mypy; pushes also run the unit tests.
+The same checks run on every pull request in GitHub Actions (`.github/workflows/ci.yml`).
 
 - Tests never touch the network (`pytest-socket` blocks it).
 - Integration tests are marked `live` and skipped by default. Run **one directory per invocation**:
