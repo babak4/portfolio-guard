@@ -11,3 +11,9 @@ real service; see `docs/queries/`.
 | `src/compass/paths.py` | `src/guard/paths.py` | `COMPASS_DATA_DIR` became `GUARD_DATA_DIR` |
 | `src/compass/worker/lock.py` | `src/guard/storage/lock.py` | prefix change; adds an optional wait so a short dashboard write retries instead of failing |
 | `src/compass/storage/ops.py` (idea) | `src/guard/storage/ops.py` | rewritten: numbered SQL migrations, append-only triggers |
+| `src/compass/market/base.py` | `src/guard/market/base.py` | pyarrow tables replaced by an `Observation` dataclass; one listing or series per call; adds the `DataIntegrityError` hierarchy and a raw-payload sink type |
+| `src/compass/market/fetch.py` | `src/guard/market/fetch.py` | first-provider-wins replaced by collecting up to N sources with per-provider error records; entry-point loading dropped |
+| `src/compass/market/providers/yfinance_provider.py` | `src/guard/market/providers/yahoo.py` | landing store replaced by an injectable sink; lazy `yfinance` import |
+| `src/compass/market/providers/stooq.py` | `src/guard/market/providers/stooq.py` | landing store replaced by an injectable sink |
+| `src/compass/market/providers/frankfurter.py` | `src/guard/market/providers/frankfurter.py` | landing store replaced by an injectable sink |
+| `src/compass/market/providers/_http.py` | `src/guard/market/providers/_http.py` | logs only source and status, never URL or parameters |
