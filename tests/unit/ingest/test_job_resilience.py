@@ -132,7 +132,7 @@ def test_instruments_are_fetched_once_for_all_accounts(make_client, data_dir) ->
     cfg = load_config()[0]
     from datetime import UTC, datetime
 
-    from guard.ingest.snapshot_job import _collect
+    from guard.ingest.snapshot_job import collect_snapshots
 
     requested: list[str] = []
     clients = {}
@@ -145,7 +145,7 @@ def test_instruments_are_fetched_once_for_all_accounts(make_client, data_dir) ->
         return clients[account_id][0]
 
     now = datetime(2026, 11, 9, 12, tzinfo=UTC)
-    _collect(now, now.date(), cfg, client_for, None)
+    collect_snapshots(now, now.date(), cfg, client_for, None)
     for _client, fake in clients.values():
         requested.extend(
             str(r.url) for r in fake.requests if r.url.path.endswith("/equity/metadata/instruments")

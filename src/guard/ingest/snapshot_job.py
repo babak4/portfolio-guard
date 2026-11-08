@@ -63,7 +63,7 @@ def run_snapshot(
             if snapshot_run_done(conn, slot):
                 return "skipped"
             try:
-                snapshots, history = _collect(now, day, config, client_for, manual_path)
+                snapshots, history = collect_snapshots(now, day, config, client_for, manual_path)
                 for snap in snapshots:
                     write_snapshot(conn, snap)
                 for account_id, kinds in history.items():
@@ -81,7 +81,7 @@ def run_snapshot(
             conn.close()
 
 
-def _collect(
+def collect_snapshots(
     now: datetime,
     day: date,
     config: GuardConfig,

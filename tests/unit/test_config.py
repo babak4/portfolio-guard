@@ -47,3 +47,20 @@ def test_same_config_same_version(data_dir: Path) -> None:
 def test_unknown_version_raises(data_dir: Path) -> None:
     with pytest.raises(ConfigError):
         read_version("deadbeefdeadbeef")
+
+
+def test_allocation_defaults_to_no_fund_targets_and_a_small_minimum_trade(data_dir: Path) -> None:
+    cfg, _ = load_config()
+    assert cfg.allocation.growth_targets == {}
+    assert cfg.allocation.min_trade_gbp == 25
+    assert cfg.constraints.us_exposure_cap == 0.50
+    assert cfg.constraints.fee_ceiling == 0.0015
+    assert cfg.ladder.max_weekly_change == 0.15
+
+
+def test_live_series_defaults_name_two_independent_global_etfs(data_dir: Path) -> None:
+    cfg, _ = load_config()
+    assert cfg.live_series.primary == "VWRP:XLON"
+    assert cfg.live_series.secondary == "VT:XNYS"
+    assert cfg.live_series.history_days >= 365
+    assert cfg.data.live_return_tolerance == 0.02

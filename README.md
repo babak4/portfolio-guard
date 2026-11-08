@@ -88,14 +88,40 @@ Names used so far:
 
 ## Running
 
-The daily portfolio snapshot job is the only runnable service so far:
+The worker schedules three jobs in `Europe/London` time (all times come from `guard.yaml`):
+
+- the weekly advice run, Wednesday 12:00;
+- the daily light check, 22:30, which alerts on a fall of 5% in a day, 8% in a week or a volatility spike, says whether
+  the fast path applies, and never trades or changes the ladder;
+- the daily portfolio snapshot, 22:30.
 
 ```bash
-make snapshot   # uv run python -m guard.ingest.snapshot_job
+make worker      # python -m guard.worker: run the scheduler
+make weekly      # run this week's advice now (ARGS="--slot <a date this week> --isa-lump-sum 2000")
+make daily       # run the daily check now
+make pause       # stop all advice until resumed
+make resume      # allow advice again
+make status      # pause switch and the last successful run of each job, with its age
+make snapshot    # uv run python -m guard.ingest.snapshot_job (the snapshot job on its own)
+uv run python -m guard.worker respond RUN_ID followed|changed|ignored --note "..."
 ```
 
-It fires once a day at the configured time. `GUARD_T212_BASE_URL` selects the host (default
-`https://live.trading212.com/api/v0`; use `https://demo.trading212.com/api/v0` for the demo account).
+A weekly run reads Trading212 and any manual holdings, builds the live signal series (VWRP closes, cross-checked by return
+against VT converted to pounds with two agreeing USD/GBP sources), moves the ladder one week, and stores one audit record:
+the inputs, signals, ladder state before and after, and the advice. It stores nothing unless every step succeeded. Bad or
+stale data records a `stopped` run with the reason and leaves the ladder alone; fix the cause and run it again for the same
+slot. The weekly slot is the Monday of the London ISO week, so a week has one run: a second run on another day of the same
+week returns the first unchanged and does not move the ladder, and `--slot` is accepted only for a date in the current
+week (exit 2 otherwise). The live series allows no lag (the latest close of both ETFs must be the latest completed
+session) and needs enough closes for the configured windows; the USD/GBP rate is the ECB rate (Frankfurter) checked
+against FRED on the dates both have. The daily check needs that day's close, and when the second ETF does not confirm a
+fall it still alerts, saying so. While paused, a run is recorded as `paused` with no advice and stored advice is not
+shown. `respond` accepts only an `ok` weekly run, ties the response to a hash of the advice stored for it (shown in the
+output) and writes to an append-only journal; a later response supersedes the earlier one without editing it. Advice
+and `ok` runs cannot be edited or deleted. Stopped, failed and locked runs and daily events go to `Deps.notify`
+(a warning log until the alert layer is added); messages that can leave the process have all numbers replaced by `#`.
+`GUARD_T212_BASE_URL` selects the Trading212 host (default `https://live.trading212.com/api/v0`; use
+`https://demo.trading212.com/api/v0` for the demo account). `run-now` exits 2 when a run stopped.
 
 The Trading212 API is in beta and its response field names are assumptions until checked against the demo host;
 see [docs/queries/t212-payload-shapes.md](docs/queries/t212-payload-shapes.md).

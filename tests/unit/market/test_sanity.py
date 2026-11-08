@@ -10,6 +10,7 @@ from guard.market import JumpError, Observation, StaleDataError, check_jumps, ch
 from guard.market.calendar import is_trading_day, last_trading_day_before
 
 RULES = DataRules(
+    live_return_tolerance=0.02,
     jump_threshold=0.15,
     crosscheck_tolerance=0.005,
     crosscheck_min_overlap=0.9,

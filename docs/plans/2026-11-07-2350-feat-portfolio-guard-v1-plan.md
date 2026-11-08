@@ -57,7 +57,7 @@ Buy-and-hold exposes a long-horizon ETF portfolio to deep drawdowns, and global 
 - R11. Weekly threshold-band rebalancing (about 5 percentage points); new money is used before selling (PRD 5.5).
 - R12. ISA lump sums follow the current ladder step and drift. GIA never gets tactical sells; each £1,000 monthly contribution is steered to the safe or growth side by ladder step.
 - R13. The safe asset defaults to a money-market ETF (CSH2; XSTR alternative); other instruments are selectable and comparable in backtests.
-- R14. Flag look-through US exposure above a limit and holdings above an ongoing-charge ceiling, and suggest alternatives from an owner-controlled watchlist available on Trading212.
+- R14. Flag the share of the whole portfolio held in US-only funds above a limit (a threshold, not a target; US exposure inside global funds is not counted) and holdings above an ongoing-charge ceiling, and suggest alternatives from an owner-controlled watchlist available on Trading212.
 
 **Backtesting and benchmarks**
 - R15. Backtests run on GBP-converted index history with proxies for pre-ETF years, marked clearly, and report CAGR, max drawdown, time to recover, volatility, Sharpe, Sortino, Calmar, turnover, time defensive and whipsaw round trips (PRD 6).
@@ -124,7 +124,7 @@ Buy-and-hold exposes a long-horizon ETF portfolio to deep drawdowns, and global 
 - KTD7. **Alerts through Apprise to Telegram**, with a second channel as dead-man fallback and a weekly heartbeat so silence is detectable. A failed data fetch alerts loudly and never fails quiet. Push text carries no balances.
 - KTD8. **Dashboard in Streamlit**, reading a read-only view of the stores, behind Tailscale or a password as in Compass's ops runbooks. It carries the pause switch and the followed/changed/ignored recording.
 - KTD9. **Backtest honesty.** Every trial is logged as a plain record of the sweep, parameter results are shown as plateau heatmaps and ranges, and walk-forward out-of-sample curves are the headline (effective sample is about four crises). The harness runs all weekly start offsets to expose timing luck.
-- KTD10. **Defaults for the PRD's open decisions**, held in config and flagged for owner confirmation: weekly maximum change 15%; US look-through cap 50%; fee ceiling 0.15%; 4 re-entry tranches; DuckDB plus SQLite; Telegram plus Streamlit. Signal thresholds and the weekday come from the backtest, not from this plan.
+- KTD10. **Defaults for the PRD's open decisions**, held in config and flagged for owner confirmation: weekly maximum change 15%; US-only fund threshold 50% of the whole portfolio; fee ceiling 0.15%; 4 re-entry tranches; DuckDB plus SQLite; Telegram plus Streamlit. Signal thresholds and the weekday come from the backtest, not from this plan.
 
 ### High-Level Technical Design
 
@@ -386,7 +386,7 @@ Waits on: PR2 (merge order, plus the owner's gate decision before this group sta
   1. Copy the drift and bands logic and the cash-flow rebalance stage; drop the tax and sale-to-GIA stages. New money is allocated first; ISA changes may sell; GIA gets no sells.
   2. Steering: each £1,000 monthly GIA contribution and ISA lump sum goes to the safe or growth side per ladder step and drift.
   3. Exclude fixed satellites (BRK.B) from tactical totals.
-  4. Flag look-through US exposure above the cap (from per-ETF region weights held in config with a source and date) and holdings above the fee ceiling, suggesting watchlist alternatives available on Trading212 (seeds CUKX, VMID, XDEW).
+  4. Flag US-only funds above the threshold (a per-fund `us_only` flag in the fund reference file, not regional weights) and holdings above the fee ceiling, suggesting watchlist alternatives available on Trading212 (seeds CUKX, VMID, XDEW).
   5. Guardrails: the pause switch blocks all advice; equity floor; maximum weekly change; advice versus holdings sanity (trade sizes cannot exceed holdings or cash); data sanity from U2 and U3. Any failure produces a "no advice, here is why" result.
 - **Test scenarios:**
   - A 5.1-point drift past a 5-point band yields a rebalance; exactly 5.0 does not.
@@ -394,7 +394,7 @@ Waits on: PR2 (merge order, plus the owner's gate decision before this group sta
   - A de-risk step is expressed as ISA sells plus GIA contribution steering, with no GIA sell line.
   - Property: no advice sells more than held, spends more than available cash, or leaves equity below the floor.
   - Pause on: output is a "paused" result with no trades.
-  - US exposure at 52% against a 50% cap yields a flag naming the contributing holdings.
+  - US-only funds at 52% of the whole portfolio against a 50% threshold yield a flag naming the contributing holdings; a global fund with a large US share does not count.
   - A holding at 0.22% against a 0.15% ceiling yields a flag and a watchlist alternative only if flagged available on Trading212.
   - BRK.B never appears in a trade line.
   - Golden: a stored holdings snapshot and target yield the expected trade list.

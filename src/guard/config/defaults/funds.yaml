@@ -1,0 +1,138 @@
+# Fund reference. Every entry is unverified until checked against the factsheet.
+# Override or extend per symbol in $GUARD_DATA_DIR/config/funds.yaml.
+# ongoing_charge is a fraction (0.0019 = 0.19%); null means unknown, never a guess.
+# index_group names the index a fund tracks; only funds sharing a non-null group are offered as
+# like-for-like alternatives. null means no equivalent is known.
+# available_on_t212: true / false / null (unknown); an unknown flag is never suggested as an alternative.
+funds:
+  - symbol: VWRP
+    name: Vanguard FTSE All-World Acc
+    role: growth
+    category: global
+    us_only: false
+    index_group: ftse-all-world
+    ongoing_charge: 0.0019
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: VWCE
+    name: Vanguard FTSE All-World
+    role: growth
+    category: global
+    us_only: false
+    index_group: ftse-all-world
+    ongoing_charge: 0.0019
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: VUAG
+    name: Vanguard S&P 500 Acc
+    role: growth
+    category: us
+    us_only: true
+    index_group: sp500
+    ongoing_charge: 0.0007
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: CUKX
+    name: iShares Core FTSE 100
+    role: growth
+    category: uk
+    us_only: false
+    index_group: ftse-100
+    ongoing_charge: 0.0007
+    available_on_t212: null
+    watchlist: true
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: VMID
+    name: Vanguard FTSE 250
+    role: growth
+    category: uk
+    us_only: false
+    index_group: ftse-250
+    ongoing_charge: 0.001
+    available_on_t212: null
+    watchlist: true
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: XDEW
+    name: Xtrackers S&P 500 Equal Weight
+    role: growth
+    category: us
+    us_only: true
+    index_group: sp500-equal-weight
+    ongoing_charge: 0.002
+    available_on_t212: null
+    watchlist: true
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: VHVG
+    name: Vanguard FTSE Developed World
+    role: growth
+    category: global
+    us_only: false
+    index_group: ftse-developed
+    ongoing_charge: null
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: VERG
+    name: Vanguard FTSE Developed Europe
+    role: growth
+    category: europe
+    us_only: false
+    index_group: ftse-developed-europe
+    ongoing_charge: null
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: ACWI
+    name: MSCI ACWI fund
+    role: growth
+    category: global
+    us_only: false
+    index_group: msci-acwi
+    ongoing_charge: null
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: BRK.B
+    name: Berkshire Hathaway B
+    role: growth
+    category: single-stock
+    us_only: true
+    ongoing_charge: null
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: CSH2
+    name: Money-market fund (safe asset)
+    role: safe
+    category: money-market
+    us_only: false
+    index_group: gbp-money-market
+    ongoing_charge: 0.001
+    available_on_t212: null
+    watchlist: false
+    verified: false
+    note: check against the factsheet before relying on this
+  - symbol: XSTR
+    name: Money-market fund
+    role: safe
+    category: money-market
+    us_only: false
+    index_group: gbp-money-market
+    ongoing_charge: null
+    available_on_t212: null
+    watchlist: true
+    verified: false
+    note: check against the factsheet before relying on this
