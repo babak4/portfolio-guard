@@ -76,4 +76,9 @@ The run id is printed by `make weekly` and shown in the report.
 See `ops/deploy.md` section 8. In short: `make restore-drill` proves the latest backup works;
 a real restore is `python -m guard.storage.backup restore <backup folder> --data-dir <dir> [--force]`
 with the stack stopped. Then restore `.env` from your password manager and run `status`.
-A backup that fails its manifest check is refused; use the next older one.
+A backup that fails its manifest check is refused; use the next older one. A restore stops if any job
+holds a lock, checks the staged copy before swapping, and keeps the old data as `<dir>.pre-restore-<stamp>`.
+
+Backups: encrypt them (for example with `age`) before they leave the host and keep a copy off the VM.
+The scheduled backup must report failure (the cron line in `ops/deploy.md` pings a healthchecks-style
+URL and its `/fail` endpoint). `last_backup_at` in the control table shows when the last one finished.

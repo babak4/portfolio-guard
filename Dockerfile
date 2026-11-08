@@ -1,6 +1,7 @@
 # Portfolio Guard image. Secrets are never copied in: they arrive at runtime through env_file.
+# Base pinned to the minor version in .python-version; bump both together.
 FROM python:3.14-slim
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
 WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy PYTHONUNBUFFERED=1 TZ=Europe/London
 COPY pyproject.toml uv.lock .python-version ./

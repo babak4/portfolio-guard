@@ -49,6 +49,9 @@ class StatusView:
     expected_weekly_slot: str
     warning: str | None
     alert_deliveries: tuple[dict[str, Any], ...] = ()
+    alert_problem: str | None = None  # why the owner may not be hearing from the system
+    week_paused: bool = False  # the expected week is covered only by a run recorded as paused
+    snapshot_failed: bool = False
 
 
 @dataclass(frozen=True)

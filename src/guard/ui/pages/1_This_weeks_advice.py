@@ -14,18 +14,31 @@ with ui.page("This week's advice") as ctx:
         st.stop()
     labels = {r.run_id: f"Week of {r.slot} ({r.status})" for r in runs}
     run_id = st.selectbox("Week", list(labels), format_func=labels.__getitem__)
-    view = readapi.advice_view(ctx.conn, None if run_id == runs[0].run_id else run_id)
+    show_paused = False
+    if readapi.status_view(ctx.conn, ctx.cfg, ui.utcnow()).paused:
+        st.warning("Advice is paused, so the advice is not shown.")
+        show_paused = st.checkbox("Show the advice anyway", key="show_paused")
+    view = readapi.advice_view(
+        ctx.conn, None if run_id == runs[0].run_id else run_id, show_paused=show_paused
+    )
     if view is None:
         st.info(ui.NO_RUNS)
         st.stop()
     ui.light_banner(view.light)
     if not view.has_advice:
         if view.paused and view.run_status == "ok":
-            st.warning("Advice is paused, so this week's advice is not shown.")
+            pass  # the paused warning above already says why
         else:
             st.error(f"This run {view.run_status}: {view.stop_reason or 'no reason recorded'}.")
         st.stop()
     assert view.decision and view.sleeve and view.ladder_state
+    behind = ui.stale_week(ctx.cfg, view.slot, ui.utcnow())
+    if behind is not None and view.run_id == runs[0].run_id:
+        st.error(f"This is last week's advice (week of {view.slot}). This week's has not run yet.")
+        if not st.checkbox("Show last week's advice anyway", key="show_stale"):
+            st.stop()
+    elif behind is not None:
+        st.warning(f"This is advice from an earlier week (week of {view.slot}).")
     st.caption(
         f"Prices as of the close on {view.last_close_date}. "
         f"Advice reference {(view.advice_hash or '')[:12]} (ties a response to this advice)."

@@ -21,10 +21,20 @@ RUN_ID = "weekly-2026-11-09"
 
 
 @pytest.fixture(autouse=True)
-def open_for_local(monkeypatch: pytest.MonkeyPatch) -> None:
+def open_for_local(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in ("GUARD_ALLOWED_USERS", "GUARD_DASHBOARD_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("GUARD_DASHBOARD_INSECURE_LOCAL", "1")
+    from streamlit import config
+
+    config.set_option("server.address", "127.0.0.1")
+    yield
+    config.set_option("server.address", None)
+
+
+@pytest.fixture(autouse=True)
+def clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("guard.ui.components.utcnow", lambda: NOW)
 
 
 @pytest.fixture
@@ -133,3 +143,67 @@ def test_access_is_refused_without_configuration(
     at = _run(UI / "app.py")
     assert any("not configured" in e.value for e in at.error)
     assert not at.button
+
+
+def _set_clock(monkeypatch: pytest.MonkeyPatch, when: datetime) -> None:
+    monkeypatch.setattr("guard.ui.components.utcnow", lambda: when)
+
+
+def test_current_advice_has_no_stale_banner(recorded: None) -> None:
+    at = _run(UI / "pages" / "1_This_weeks_advice.py")
+    assert "has not run yet" not in _text(at)
+    assert any(h.value == "What to do" for h in at.subheader)
+
+
+def test_stale_advice_is_flagged_and_hidden_until_shown_anyway(
+    recorded: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_clock(monkeypatch, datetime(2026, 11, 25, 12, 0, tzinfo=UTC))
+    page = UI / "pages" / "1_This_weeks_advice.py"
+    at = _run(page)
+    assert any(
+        "This is last week's advice (week of 2026-11-09). This week's has not run yet." in e.value
+        for e in at.error
+    )
+    assert not any(h.value == "What to do" for h in at.subheader)
+    at.checkbox(key="show_stale").check().run()
+    assert not at.exception
+    assert any(h.value == "What to do" for h in at.subheader)
+
+
+def _pause() -> None:
+    c = open_ops()
+    run_store.set_paused(c, True, NOW)
+    c.close()
+
+
+def test_paused_advice_is_withheld_on_the_advice_page_until_expanded(recorded: None) -> None:
+    _pause()
+    page = UI / "pages" / "1_This_weeks_advice.py"
+    at = _run(page)
+    assert "paused" in _text(at).lower()
+    assert not any(h.value == "What to do" for h in at.subheader)
+    at.checkbox(key="show_paused").check().run()
+    assert any(h.value == "What to do" for h in at.subheader)
+
+
+def test_respond_page_hides_the_trade_count_while_paused(recorded: None) -> None:
+    page = UI / "pages" / "5_Respond.py"
+    assert "That week's advice:" in _text(_run(page))
+    _pause()
+    at = _run(page)
+    assert "advice is paused" in _text(at).lower()
+    assert "That week's advice:" not in _text(at)
+    at.checkbox(key="show_paused").check().run()
+    assert "That week's advice:" in _text(at)
+
+
+def test_configuration_errors_do_not_echo_file_content(data_dir: Path, recorded: None) -> None:
+    (data_dir / "config").mkdir(exist_ok=True)
+    (data_dir / "config" / "overrides.yaml").write_text(
+        "ladder:\n  max_weekly_change: topsecret-value\n"
+    )
+    at = _run(UI / "app.py")
+    shown = _text(at)
+    assert "topsecret-value" not in shown
+    assert "configuration could not be read" in shown

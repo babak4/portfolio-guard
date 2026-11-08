@@ -129,9 +129,11 @@ def render_weekly(result: RunResult, account_ids: Sequence[str] = ()) -> Message
     return Message(f"{MARKER[light]} {title}", "\n".join(lines), URGENCY[light], "weekly")
 
 
-def render_daily(result: DailyResult, event: DailyEvent) -> Message:
+def render_daily(
+    result: DailyResult, event: DailyEvent, account_ids: Sequence[str] = ()
+) -> Message:
     light = daily_light(event_count=len(result.events) or 1, fast_path=event.fast_path)
-    lines = [_daily_headline(result, event)]
+    lines = [_daily_headline(result, event, account_ids)]
     if result.paused:
         lines.append("No fast-path guidance: advice is paused.")
     elif event.fast_path:
@@ -144,23 +146,31 @@ def render_daily(result: DailyResult, event: DailyEvent) -> Message:
     return Message(f"{MARKER[light]} Daily check", "\n".join(lines), URGENCY[light], "daily")
 
 
-def _daily_headline(result: DailyResult, event: DailyEvent) -> str:
+def _daily_headline(result: DailyResult, event: DailyEvent, account_ids: Sequence[str] = ()) -> str:
     if event.kind == "day_drop" and result.day_return is not None:
         return f"World shares fell {-result.day_return:.1%} yesterday."
     if event.kind == "week_drop" and result.week_return is not None:
         return f"World shares fell {-result.week_return:.1%} over five trading days."
     if event.kind == "volatility":
         return "Market volatility is above its limit."
-    return event.message.split(". ")[0].rstrip(".") + "."
+    return scrub(event.message.split(". ")[0], account_ids).rstrip(".") + "."
 
 
-_STATUS_WORDS = {"stopped": "stopped", "failed": "failed", "locked": "could not start"}
+_STATUS_WORDS = {
+    "stopped": "stopped",
+    "failed": "failed",
+    "locked": "could not start",
+    "missed": "was missed",
+}
 
 
 def render_alert(notice: Notice, account_ids: Sequence[str] = ()) -> Message:
-    what = {"weekly": "weekly run", "daily": "daily check", "snapshot": "snapshot"}.get(
-        notice.kind, notice.kind
-    )
+    what = {
+        "weekly": "weekly run",
+        "daily": "daily check",
+        "snapshot": "snapshot",
+        "heartbeat": "weekly-advice check",
+    }.get(notice.kind, notice.kind)
     word = _STATUS_WORDS.get(notice.status, notice.status)
     lines = [f"The {what} {word}."]
     reason = scrub(notice.message, account_ids).strip()
@@ -189,14 +199,14 @@ def render_test() -> Message:
 
 
 def render_notice(notice: Notice, account_ids: Sequence[str] = ()) -> Message:
-    """The message for a notice, falling back to the alert wording when the data is missing."""
+    """The message for a notice, chosen by its status first, falling back to the alert wording."""
     result = notice.result
-    if notice.kind == "heartbeat":
+    if notice.status == "missing":
         return render_heartbeat(notice.slot)
     if notice.status == "report" and isinstance(result, RunResult):
         return render_weekly(result, account_ids)
     if notice.status == "event" and isinstance(result, DailyResult) and notice.event is not None:
-        return render_daily(result, notice.event)
+        return render_daily(result, notice.event, account_ids)
     if notice.status == "event":
         text = scrub(notice.message, account_ids)
         return Message(f"{MARKER['amber']} Daily check", f"{text}\n{DASHBOARD}", "warn", "daily")

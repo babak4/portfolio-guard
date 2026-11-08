@@ -152,8 +152,14 @@ What you receive:
 - the weekly report after each weekly run (also your heartbeat: if it does not arrive, something is wrong);
 - an alert when a weekly run, the daily check or the snapshot stops, fails or cannot get the lock;
 - a daily message for each market event, saying whether the fast path applies and whether the second source confirmed it;
-- a "weekly advice is missing" alert, sent once, if by 18:00 on the weekly run's day (`schedule.heartbeat_time`) the week
-  has no `ok` or `paused` run.
+- a "weekly advice is missing" alert, sent once per week, when the latest week whose run is due has no `ok` or `paused`
+  run. The check runs every day at `schedule.heartbeat_time` and once when the worker starts, so a dead scheduler or a
+  missed week is found within a day. It waits (and looks again next day) while a weekly run is in progress;
+- an alert when the scheduler itself misses a job or a job raises;
+- a plain "could not start" or "alert pipeline failed" message, built straight from your secrets, when a job cannot open
+  its database or the normal alert path breaks.
+
+Each daily market event is pushed once per day and kind, even if the worker restarts.
 
 Set up Telegram:
 
@@ -174,8 +180,24 @@ GUARD_NTFY_SERVER=           # optional: your own ntfy server, e.g. https://ntfy
    (never the token). `make status` shows whether alerts are configured and the last delivery per channel.
 
 If the primary channel fails, the fallback is tried; every attempt is stored in the `alert_delivery` table with its error
-(amounts, tokens and URLs removed). With no channel configured the alert is logged as "not configured" and the run is not
-affected. A failure to send an alert never stops a run.
+(amounts, tokens and URLs removed). A failure to send an alert never stops a run, but it is never silent either:
+
+- With no channel configured the worker logs an ERROR at start, and the dashboard shows an alerts banner at the top and
+  an amber light. `make status` prints `ALERT PROBLEM: not configured` on its first line.
+- When the last alert failed on every channel the same banner shows, and `status --check` exits 1.
+
+### Healthchecks and the dead-man ping
+
+The worker container's healthcheck is `python -m guard.worker status --check --scheduler`. It fails when this week's
+advice is overdue (a week recorded as `paused` counts as done and shows as paused, not overdue), when the last alert
+failed on every channel, or when the scheduler has not written its once-a-minute tick in 10 minutes. Plain
+`status --check` leaves out the tick test. A fresh install with no alerts configured is not unhealthy; it is flagged
+instead.
+
+For a check that works even when the whole host is down, set `GUARD_PING_URL` to a healthchecks.io style ping URL (treat
+it as a secret). The worker does a GET (5 second timeout, failures logged without the URL) after each good weekly run and
+after each daily heartbeat pass. Configure the service with a period of one day plus a grace of a few hours, and add your
+phone as its notification channel.
 
 ## Dashboard
 
@@ -190,13 +212,25 @@ export GUARD_DASHBOARD_INSECURE_LOCAL=1    # local development only, see access 
 make dashboard                             # http://127.0.0.1:8501
 ```
 
-Access (checked on every page; the first rule that applies wins):
+Access (checked on every page):
 
-1. `GUARD_ALLOWED_USERS` (comma-separated logins): the `Tailscale-User-Login` header must be in the list.
-   Use this behind `tailscale serve`, which sets the header; anyone else is refused.
-2. `GUARD_DASHBOARD_PASSWORD`: a sign-in form, compared in constant time.
-3. `GUARD_DASHBOARD_INSECURE_LOCAL=1`: no sign-in, and only while the server listens on loopback.
-4. None of these: the page refuses to render and says what to set.
+1. **Recommended: set both `GUARD_ALLOWED_USERS` and `GUARD_DASHBOARD_PASSWORD`.** The
+   `Tailscale-User-Login` header (set by `tailscale serve`) must be in the list AND the password must be
+   entered. The header alone can be forged by anyone who reaches the app directly, so the password backs it up.
+2. Only `GUARD_ALLOWED_USERS` (comma-separated logins): the header decides, and every page shows a notice
+   that access relies on `tailscale serve` being the only way in.
+3. Only `GUARD_DASHBOARD_PASSWORD`: a sign-in form, compared in constant time.
+4. `GUARD_DASHBOARD_INSECURE_LOCAL=1`: no sign-in, and only while `server.address` is explicitly
+   `127.0.0.1`, `localhost` or `::1` (an unset address listens everywhere and is refused).
+5. None of these: the page refuses to render and says what to set.
+
+The password is never ignored: with the users list set it is required as well. It must be at least 12
+characters (a shorter one is refused with a message). Wrong passwords are slowed down (1 s, 2 s, 4 s ...
+capped at 30 s) and after 10 failures sign-in locks for 15 minutes; the counter is per process, so a
+restart clears it.
+
+The dashboard container receives only `GUARD_DATA_DIR`, `GUARD_ALLOWED_USERS` and
+`GUARD_DASHBOARD_PASSWORD`; broker and notifier secrets reach the worker only.
 
 Pages:
 
@@ -205,6 +239,8 @@ Pages:
 - **This week's advice**: trades, the monthly contribution, allocation against target (funds with unverified
   data are marked), growth and safe fund shares, notes, safety checks including adjusted ones, the ladder
   decision, the three signals, the close the advice is as of and its reference hash. Any past week can be picked.
+  When this week's run has not happened yet, the page says so in red and keeps last week's plan behind a
+  tick box. While advice is paused the advice is withheld until you tick to show it.
 - **Index and signals**: the closes with the 200-day average and the 52-week high, the signals with their
   trigger levels, and the fall from the high against the -20% line.
 - **Portfolio**: account totals over time (amounts are shown; keep the dashboard private) and the allocation.

@@ -1,10 +1,11 @@
 # Unverified: written without running Docker. See ops/deploy.md.
 # The dashboard binds 0.0.0.0 INSIDE its container only because Docker cannot forward to a container
-# loopback; the host side is published to 127.0.0.1 only (a unit test enforces this).
-# Secrets arrive at runtime through .env (chmod 600, never in git, never in the image).
+# loopback; every published port must start with "127.0.0.1:" (a unit test enforces this).
+# Broker and notifier secrets arrive at runtime through .env (chmod 600, never in git, never in
+# the image) and reach the worker only. The dashboard has no env_file; compose reads .env itself
+# for the two pass-throughs below, and the dashboard sees nothing else from it.
 x-guard: &guard
   build: .
-  env_file: .env
   restart: unless-stopped
   read_only: true
   tmpfs: ["/tmp"]
@@ -19,18 +20,25 @@ x-guard: &guard
 services:
   worker:
     <<: *guard
+    env_file: .env
     command: ["python", "-m", "guard.worker"]
     mem_limit: 768m
     cpus: 1.0
     pids_limit: 200
     healthcheck:
-      test: ["CMD", "python", "-m", "guard.worker", "status", "--check"]
+      test: ["CMD", "python", "-m", "guard.worker", "status", "--check", "--scheduler"]
       interval: 5m
       timeout: 30s
       retries: 2
       start_period: 1m
   dashboard:
     <<: *guard
+    environment:
+      GUARD_DATA_DIR: /data
+      TZ: Europe/London
+      HOME: /tmp
+      GUARD_ALLOWED_USERS: ${GUARD_ALLOWED_USERS:-}
+      GUARD_DASHBOARD_PASSWORD: ${GUARD_DASHBOARD_PASSWORD:-}
     command:
       - streamlit
       - run

@@ -9,12 +9,17 @@ from zoneinfo import ZoneInfo
 from guard.config import GuardConfig
 from guard.readapi._lights import summary
 from guard.readapi.models import LastRun, StatusView
+from guard.report import overall_light
 from guard.storage import read_store, run_store
+from guard.storage.alert_store import alert_problem
 
 KINDS = ("weekly", "daily", "snapshot")
 _WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
 # How long after the scheduled time a weekly run may still be arriving before it counts as late.
 OVERDUE_GRACE = timedelta(hours=6)
+# A daily run older than this no longer colours the light.
+DAILY_RECENT = timedelta(days=3)
+_FAILED = ("failed", "stopped", "locked")
 
 
 def expected_weekly_slot(cfg: GuardConfig, now: datetime) -> date:
@@ -44,20 +49,37 @@ def status_view(conn: sqlite3.Connection, cfg: GuardConfig, now: datetime) -> St
         )  # fmt: skip
     weekly_rows = read_store.recent_runs(conn, limit=1, kind="weekly")
     latest = summary(weekly_rows[0]) if weekly_rows else None
-    light = None if latest is None else latest.light
-    if paused and light in (None, "green"):
-        light = "amber"
     has_runs = bool(read_store.recent_runs(conn, limit=1))
 
     expected = expected_weekly_slot(cfg, now).isoformat()
+    state = run_store.weekly_slot_state(conn, expected)
     last_weekly = next(r for r in last_runs if r.kind == "weekly")
-    overdue = has_runs and (last_weekly.slot is None or last_weekly.slot < expected)
+    overdue = has_runs and state == "missing"
     warning = None
     if overdue:
         warning = (
             f"The weekly run for the week of {expected} has not completed. "
             f"Last successful weekly run: {last_weekly.slot or 'never'}."
         )
+
+    daily_rows = read_store.recent_runs(conn, limit=1, kind="daily")
+    daily = daily_rows[0] if daily_rows else None
+    daily_recent = (
+        daily is not None and date.fromisoformat(daily.slot) >= (now - DAILY_RECENT).date()
+    )
+    snapshot_rows = read_store.recent_runs(conn, limit=1, kind="snapshot")
+    snapshot_failed = bool(snapshot_rows) and snapshot_rows[0].status in _FAILED
+    problem = alert_problem(conn)
+    computed = overall_light(
+        None if latest is None else latest.light,
+        overdue,
+        daily.status if daily is not None and daily_recent else None,
+        daily is not None and daily_recent and daily.fast_path,
+        snapshot_failed,
+        problem,
+        paused or state == "paused",
+    )
+    light = None if not has_runs and computed == "green" else computed
     return StatusView(
         paused=paused,
         has_runs=has_runs,
@@ -68,4 +90,7 @@ def status_view(conn: sqlite3.Connection, cfg: GuardConfig, now: datetime) -> St
         expected_weekly_slot=expected,
         warning=warning,
         alert_deliveries=tuple(read_store.recent_alert_deliveries(conn, 5)),
+        alert_problem=problem,
+        week_paused=state == "paused",
+        snapshot_failed=snapshot_failed,
     )

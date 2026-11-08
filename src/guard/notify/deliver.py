@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import logging
 import re
+import sqlite3
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Protocol
 from urllib.parse import urlparse
 
@@ -22,6 +23,7 @@ from guard.notify.render import Message, render_notice
 from guard.run.redact import redact_amounts
 from guard.run.results import Notice
 from guard.secrets import SecretNotFound, get_secret
+from guard.storage import open_ops
 from guard.storage.alert_store import AlertStore
 
 if TYPE_CHECKING:
@@ -163,25 +165,110 @@ def deliver(
     return DeliveryResult(False, None, tuple(attempts))
 
 
+def _record_static(conn: sqlite3.Connection | None, kind: str, ok: bool, error: str | None) -> None:
+    """Best effort: note a static push in the alert log, opening the database if none is given."""
+    own = conn is None
+    try:
+        target = open_ops() if conn is None else conn
+    except Exception as e:  # noqa: BLE001 - the push matters more than its record
+        log.error("could not record a static alert: %s", type(e).__name__)
+        return
+    try:
+        AlertStore(target).record(
+            kind=kind, urgency="urgent", channel="static", ok=ok, error=error, now=datetime.now(UTC)
+        )
+    except Exception as e:  # noqa: BLE001
+        log.error("could not record a static alert: %s", type(e).__name__)
+    finally:
+        if own:
+            target.close()
+
+
+def push_static(
+    title: str,
+    body: str,
+    *,
+    kind: str,
+    sender: Sender | None = None,
+    channels: Callable[[], Sequence[Channel]] = channels_from_secrets,
+    conn: sqlite3.Connection | None = None,
+) -> bool:
+    """Push fixed text straight from the secrets, with no ``Deps``, rendering or run data.
+
+    The last line of defence when the normal alert path cannot start or has itself failed. It
+    never raises and logs only exception types. ``True`` when a channel accepted the message."""
+    try:
+        chosen: Sender = sender or AppriseSender()
+        message = Message(title, body, "urgent", kind)
+        found = list(channels())
+    except Exception as e:  # noqa: BLE001 - nothing here may raise
+        log.error("static alert could not be prepared: %s", type(e).__name__)
+        return False
+    if not found:
+        log.error("static alert not sent: no channel is configured")
+    for channel in found:
+        try:
+            chosen.send(channel, message)
+        except Exception as e:  # noqa: BLE001 - try the next channel
+            log.error("static alert via %s failed: %s", channel.name, type(e).__name__)
+            continue
+        _record_static(conn, kind, True, None)
+        return True
+    _record_static(conn, kind, False, NOT_CONFIGURED if not found else "all channels failed")
+    return False
+
+
+PIPELINE_FAILED_TITLE = "Portfolio Guard: alert pipeline failed"
+PIPELINE_FAILED_BODY = (
+    "An alert could not be prepared or sent normally. Check the dashboard and the worker log."
+)
+
+
 def make_notifier(
     deps: Deps,
     *,
     sender: Sender | None = None,
     channels: Callable[[], Sequence[Channel]] = channels_from_secrets,
 ) -> Callable[[Notice], None]:
-    """The function for ``Deps.notify``: render the notice and deliver it. It never raises."""
+    """The function for ``Deps.notify``: render the notice and deliver it. It never raises; if the
+    pipeline itself breaks it still tries a fixed-text push."""
     chosen: Sender = sender or AppriseSender()
 
     def notify(notice: Notice) -> None:
         try:
-            accounts = [a.id for a in deps.config.portfolio.accounts]
-            message = render_notice(notice, accounts)
-            store = AlertStore(deps.ops)
-            now = deps.clock()
-            result = deliver(message, chosen, channels(), store, now)
-            if result.delivered and notice.kind == "heartbeat":
-                store.mark_once(heartbeat_key(notice.slot), now)
+            _send(notice)
         except Exception as e:  # noqa: BLE001 - an alert problem must never break a run
             log.error("could not send a %s notice: %s", notice.status, type(e).__name__)
+            push_static(
+                PIPELINE_FAILED_TITLE,
+                PIPELINE_FAILED_BODY,
+                kind="pipeline",
+                sender=chosen,
+                channels=channels,
+                conn=deps.ops,
+            )
+
+    def _send(notice: Notice) -> None:
+        accounts = [a.id for a in deps.config.portfolio.accounts]
+        message = render_notice(notice, accounts)
+        store = AlertStore(deps.ops)
+        now = deps.clock()
+        once_key = _once_key(notice)
+        if once_key is not None and notice.status == "event" and store.once_done(once_key):
+            return
+        result = deliver(message, chosen, channels(), store, now)
+        if result.delivered and once_key is not None:
+            store.mark_once(once_key, now)
 
     return notify
+
+
+def _once_key(notice: Notice) -> str | None:
+    """What makes a notice a repeat: a missing-week alert per slot, a daily event per slot and
+    kind. Only these are sent once; reports and failures are sent every time."""
+    if notice.status == "missing":
+        return heartbeat_key(notice.slot)
+    if notice.status == "event":
+        kind = notice.event.kind if notice.event is not None else "unknown"
+        return f"daily:{notice.slot}:{kind}"
+    return None

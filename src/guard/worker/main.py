@@ -11,7 +11,7 @@ import logging
 import sqlite3
 import sys
 from collections.abc import Callable, Sequence
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import TextIO
 
@@ -25,17 +25,20 @@ from guard.notify.deliver import (
 )
 from guard.notify.render import render_test
 from guard.readapi.status import status_view
+from guard.report.log_safety import install_filter
 from guard.run.daily import run_daily
 from guard.run.deps import Deps, default_deps
 from guard.run.redact import redact_amounts
 from guard.run.results import DailyResult, RunResult
 from guard.run.weekly import SlotError, run_weekly
 from guard.storage import run_store, writer_lock
-from guard.storage.alert_store import AlertStore
+from guard.storage.alert_store import PROBLEM_FAILED_EVERYWHERE, AlertStore
 from guard.worker.schedule import build_scheduler
+from guard.worker.startup import run_startup
 from guard.worker.status import build_status, format_status
 
 LOCK_WAIT_SECONDS = 30.0
+SCHEDULER_STALE = timedelta(minutes=10)
 EXIT_OK, EXIT_FAILED, EXIT_STOPPED, EXIT_LOCKED = 0, 1, 2, 3
 SHORT_HASH = 12
 CONTRIBUTION_LABEL = "monthly contribution (once a month; skip if already made)"
@@ -58,7 +61,13 @@ def _parser() -> argparse.ArgumentParser:
     status.add_argument(
         "--check",
         action="store_true",
-        help="exit 1 when this week's advice is overdue (a container healthcheck)",
+        help="exit 1 when this week's advice is overdue or the last alert failed on every "
+        "channel (a container healthcheck)",
+    )
+    status.add_argument(
+        "--scheduler",
+        action="store_true",
+        help="with --check: also exit 1 when the scheduler has not ticked in 10 minutes",
     )
     sub.add_parser("test-alert", help="send a test message through the real alert channels")
     respond = sub.add_parser("respond", help="record what you did with a piece of advice")
@@ -156,6 +165,34 @@ def _test_alert(deps: Deps, now: datetime, out: TextIO, sender: Sender | None) -
     return EXIT_FAILED
 
 
+def _status(deps: Deps, now: datetime, out: TextIO, *, check: bool, scheduler: bool) -> int:
+    view = status_view(deps.ops, deps.config, now)
+    if view.alert_problem:
+        print(
+            f"ALERT PROBLEM: {view.alert_problem}. You may not be told when something is wrong.",
+            file=out,
+        )
+    print(format_status(build_status(deps.ops, now)), file=out)
+    if view.week_paused:
+        print(f"this week's run ({view.expected_weekly_slot}) was recorded as paused", file=out)
+    print(_alert_status(deps.ops), file=out)
+    if not check:
+        return EXIT_OK
+    failed = False
+    if view.weekly_overdue:
+        print(view.warning or "this week's advice is overdue", file=out)
+        failed = True
+    if view.alert_problem == PROBLEM_FAILED_EVERYWHERE:
+        print(f"unhealthy: {view.alert_problem}", file=out)
+        failed = True
+    if scheduler:
+        tick = run_store.scheduler_tick(deps.ops)
+        if tick is None or now - tick > SCHEDULER_STALE:
+            print("unhealthy: the scheduler has not ticked in the last 10 minutes", file=out)
+            failed = True
+    return EXIT_FAILED if failed else EXIT_OK
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -164,10 +201,12 @@ def main(
     sender: Sender | None = None,
 ) -> int:
     out = out or sys.stdout
+    install_filter()  # every command can send alerts, so every command redacts log output
     args = _parser().parse_args(argv)
     if args.command is None:
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
         logging.getLogger("httpx").setLevel(logging.WARNING)
+        run_startup(deps_factory)
         build_scheduler(deps_factory).start()
         return EXIT_OK
 
@@ -189,14 +228,7 @@ def main(
                 return _show_weekly(weekly, deps.ops, out)
             return _show_daily(run_daily(deps, now), out)
         if args.command == "status":
-            print(format_status(build_status(deps.ops, now)), file=out)
-            print(_alert_status(deps.ops), file=out)
-            if args.check:
-                view = status_view(deps.ops, deps.config, now)
-                if view.weekly_overdue:
-                    print(view.warning or "this week's advice is overdue", file=out)
-                    return EXIT_FAILED
-            return EXIT_OK
+            return _status(deps, now, out, check=args.check, scheduler=args.scheduler)
         if args.command == "test-alert":
             return _test_alert(deps, now, out, sender)
         with writer_lock("run", wait_seconds=LOCK_WAIT_SECONDS) as acquired:

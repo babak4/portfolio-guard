@@ -25,12 +25,22 @@ def test_has_worker_and_dashboard(compose: dict[str, Any]) -> None:
     assert {"worker", "dashboard"} <= set(_services(compose))
 
 
+def _port_is_loopback_only(port: object) -> bool:
+    return str(port).startswith("127.0.0.1:")
+
+
+def test_port_checker_rejects_wider_bindings() -> None:
+    assert _port_is_loopback_only("127.0.0.1:8501:8501")
+    for bad in ("8501:8501", "0.0.0.0:8501:8501", "8501", ":8501:8501", "[::]:8501:8501"):
+        assert not _port_is_loopback_only(bad), bad
+
+
 def test_every_published_port_is_loopback_only(compose: dict[str, Any]) -> None:
     published = 0
     for name, svc in _services(compose).items():
         for port in svc.get("ports", []):
             published += 1
-            assert str(port).startswith("127.0.0.1:"), f"{name} publishes {port}"
+            assert _port_is_loopback_only(port), f"{name} publishes {port}"
     assert published >= 1
 
 
@@ -42,14 +52,38 @@ def test_no_privileged_or_host_network(compose: dict[str, Any]) -> None:
         assert "NET_ADMIN" not in svc.get("cap_add", []), name
 
 
-def test_env_file_is_dotenv_and_no_secrets_in_environment(compose: dict[str, Any]) -> None:
+def _env_pairs(svc: dict[str, Any]) -> list[tuple[str, str]]:
+    env = svc.get("environment", {})
+    pairs = env.items() if isinstance(env, dict) else (e.split("=", 1) for e in env)
+    return [(str(k), str(v)) for k, v in pairs]
+
+
+def test_worker_reads_secrets_from_dotenv_and_nothing_secret_is_inline(
+    compose: dict[str, Any],
+) -> None:
+    assert _services(compose)["worker"]["env_file"] in (".env", [".env"])
+    passthrough = {
+        "GUARD_ALLOWED_USERS": "${GUARD_ALLOWED_USERS:-}",
+        "GUARD_DASHBOARD_PASSWORD": "${GUARD_DASHBOARD_PASSWORD:-}",
+    }
     for name, svc in _services(compose).items():
-        assert svc["env_file"] in (".env", [".env"]), name
-        env = svc.get("environment", {})
-        pairs = env.items() if isinstance(env, dict) else (e.split("=", 1) for e in env)
-        for key, value in pairs:
-            assert not SECRET_KEY_RE.search(str(key)), f"{name}: {key} looks like a secret"
-            assert "${" not in str(value) or "?" in str(value), f"{name}: {key} interpolates"
+        for key, value in _env_pairs(svc):
+            if key in passthrough:
+                assert value == passthrough[key], f"{name}: {key}"
+                continue
+            assert not SECRET_KEY_RE.search(key), f"{name}: {key} looks like a secret"
+            assert "${" not in value, f"{name}: {key} interpolates"
+
+
+def test_dashboard_gets_no_env_file_and_no_broker_or_notifier_secrets(
+    compose: dict[str, Any],
+) -> None:
+    dash = _services(compose)["dashboard"]
+    assert "env_file" not in dash
+    keys = {k for k, _ in _env_pairs(dash)}
+    assert {"GUARD_DATA_DIR", "GUARD_ALLOWED_USERS", "GUARD_DASHBOARD_PASSWORD"} <= keys
+    for key in keys:
+        assert not key.startswith(("GUARD_T212_", "GUARD_TELEGRAM_", "GUARD_NTFY_")), key
 
 
 def test_both_services_mount_the_data_volume(compose: dict[str, Any]) -> None:
@@ -81,6 +115,15 @@ def test_dockerignore_excludes_secrets_and_data() -> None:
     for required in (".env", ".env.*", "!.env.example", ".git", "data/", "*.enc.yaml", ".venv"):
         assert required in lines, required
     assert any(ln.startswith("msci") for ln in lines)
+    for required in ("**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_*"):
+        assert required in lines, required
+
+
+def test_base_images_are_pinned() -> None:
+    text = (ROOT / "Dockerfile").read_text("utf-8")
+    assert "uv:latest" not in text
+    assert re.search(r"ghcr\.io/astral-sh/uv:\d+\.\d+\.\d+", text)
+    assert re.search(r"^FROM python:3\.\d+-slim", text, re.MULTILINE)
 
 
 def test_dockerfile_copies_no_secrets_and_runs_non_root() -> None:

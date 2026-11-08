@@ -20,7 +20,12 @@ with ui.page("Respond") as ctx:
         format_func=lambda i: f"Week of {i.split('-', 1)[1]}",
     )
     assert run_id is not None
-    advice = readapi.advice_view(ctx.conn, run_id)
+    paused = readapi.status_view(ctx.conn, ctx.cfg, ui.utcnow()).paused
+    show_paused = False
+    if paused:
+        st.warning("Advice is paused, so the trade count is not shown.")
+        show_paused = st.checkbox("Show the advice anyway", key="show_paused")
+    advice = readapi.advice_view(ctx.conn, run_id, show_paused=show_paused)
     if advice is not None and advice.has_advice:
         n = len(advice.trades)
         st.write(f"That week's advice: {n} trade{'s' if n != 1 else ''}. Reference "

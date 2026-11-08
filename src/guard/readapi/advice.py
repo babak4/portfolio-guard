@@ -11,10 +11,12 @@ from guard.readapi.models import AdviceView
 from guard.storage import read_store, run_store
 
 
-def advice_view(conn: sqlite3.Connection, run_id: str | None = None) -> AdviceView | None:
+def advice_view(
+    conn: sqlite3.Connection, run_id: str | None = None, *, show_paused: bool = False
+) -> AdviceView | None:
     """``run_id=None`` means the latest weekly run, whatever its status. While advice is paused
-    the latest run's advice is withheld (as the command line does); a run asked for by id is
-    always shown."""
+    the advice of any run, latest or asked for by id, is withheld (as the command line does)
+    unless the owner explicitly asks for it with ``show_paused``."""
     paused = run_store.get_paused(conn)
     run = (
         read_store.latest_run(conn, "weekly")
@@ -28,7 +30,7 @@ def advice_view(conn: sqlite3.Connection, run_id: str | None = None) -> AdviceVi
     )
     light = None if row is None else light_for(row)
     payload = p.parse(run.payload)
-    withheld = run_id is None and paused
+    withheld = paused and not show_paused
     if run.status != "ok" or payload is None or withheld:
         return AdviceView(run.run_id, run.slot, run.status, run.stop_reason, paused, False, light)
     cfg = p.archived_config(payload)

@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -19,12 +18,6 @@ from tests.unit.run.fakes import make_deps, market
 
 CH = Channel("telegram", "tgram://1:abc/2", secrets=("1:abc",))
 WED = datetime(2026, 11, 11, 18, 0, tzinfo=UTC)
-
-
-def _this_monday() -> str:
-    """The scheduler passes the real clock to a job, so the current week is the real one."""
-    today = datetime.now(ZoneInfo("Europe/London")).date()
-    return (today - timedelta(days=today.weekday())).isoformat()
 
 
 class Recorder:
@@ -111,7 +104,7 @@ def test_heartbeat_silent_when_the_week_has_an_ok_run(deps) -> None:  # type: ig
     run_store.record_run(
         deps.ops,
         kind="weekly",
-        slot=_this_monday(),
+        slot="2026-11-09",
         status="ok",
         stop_reason=None,
         config_version="v",

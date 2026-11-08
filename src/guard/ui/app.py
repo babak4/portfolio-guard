@@ -14,14 +14,24 @@ with ui.page("Status", needs_database=False) as ctx:
         st.info(ui.NO_RUNS)
         st.stop()
     view = readapi.status_view(ctx.conn, ctx.cfg, datetime.now(UTC))
+    if view.alert_problem:
+        st.error(
+            f"Alerts are not reaching you ({view.alert_problem}). Nothing will be pushed to your "
+            "phone until this is fixed; see the Alerts section of the README."
+        )
+    if view.warning:
+        st.error(view.warning)
+    elif view.week_paused:
+        st.warning(
+            f"Advice is paused: the weekly run for the week of {view.expected_weekly_slot} "
+            "was recorded as paused and gave no advice."
+        )
     if not view.has_runs:
         st.info(ui.NO_RUNS)
     ui.light_banner(
         view.light,
         "" if view.latest_weekly is None else f"From the weekly run of {view.latest_weekly.slot}.",
     )
-    if view.warning:
-        st.warning(view.warning)
 
     st.subheader("Pause switch")
     if view.paused:

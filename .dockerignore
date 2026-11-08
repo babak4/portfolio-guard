@@ -2,6 +2,11 @@
 .env
 .env.*
 !.env.example
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/id_*
 .git
 .github
 data/

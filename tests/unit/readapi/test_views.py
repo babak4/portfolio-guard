@@ -103,7 +103,10 @@ def test_advice_view_latest_is_hidden_while_paused(conn: sqlite3.Connection) -> 
     c.close()
     latest = readapi.advice_view(conn)
     assert latest is not None and not latest.has_advice and latest.paused
-    assert readapi.advice_view(conn, RUN_ID).has_advice  # type: ignore[union-attr]
+    by_id = readapi.advice_view(conn, RUN_ID)
+    assert by_id is not None and not by_id.has_advice and by_id.paused
+    shown = readapi.advice_view(conn, RUN_ID, show_paused=True)
+    assert shown is not None and shown.has_advice
 
 
 # ---- history ---------------------------------------------------------------------------------

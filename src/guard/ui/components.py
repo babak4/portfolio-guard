@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -15,6 +15,7 @@ from guard import readapi
 from guard.config import GuardConfig, load_config
 from guard.paths import DataDirError
 from guard.readapi.models import AllocationLine, SignalView
+from guard.readapi.status import expected_weekly_slot
 from guard.report import Light
 from guard.ui import auth
 
@@ -39,6 +40,23 @@ NO_RUNS = (
     "(`make weekly` runs it now)."
 )
 FLASH_KEY = "guard_flash"
+CONFIG_UNREADABLE = (
+    "The configuration could not be read. Check config/overrides.yaml in the data directory "
+    "on the host."
+)
+
+
+def utcnow() -> datetime:
+    return datetime.now(UTC)
+
+
+def stale_week(cfg: GuardConfig, slot: str, now: datetime) -> date | None:
+    """The expected weekly slot when ``slot`` is older than it (this week's run is missing)."""
+    expected = expected_weekly_slot(cfg, now)
+    try:
+        return expected if date.fromisoformat(slot) < expected else None
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True)
@@ -61,8 +79,8 @@ def page(title: str, *, needs_database: bool = True) -> Iterator[Ctx]:
     except DataDirError:
         st.error("GUARD_DATA_DIR is not set, so there is no data to show.")
         st.stop()
-    except ValueError as e:  # a configuration the owner can fix
-        st.error(f"The configuration could not be read: {e}")
+    except ValueError:  # a configuration the owner can fix; the text may quote file content
+        st.error(CONFIG_UNREADABLE)
         st.stop()
     st.title(title)
     flash = st.session_state.pop(FLASH_KEY, None)

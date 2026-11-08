@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from guard.storage.run_store import ALERTS_CONFIGURED_KEY
+
+PROBLEM_NOT_CONFIGURED = "not configured"
+PROBLEM_FAILED_EVERYWHERE = "the last alert failed on every channel"
+
 
 @dataclass(frozen=True)
 class LastDelivery:
@@ -57,3 +62,32 @@ class AlertStore:
             "INSERT OR IGNORE INTO alert_once (key, created_at) VALUES (?, ?)",
             (key, now.isoformat()),
         )
+
+    def latest(self) -> LastDelivery | None:
+        """The most recent delivery attempt on any channel (channel ``none`` if unconfigured)."""
+        row = self._conn.execute(
+            "SELECT channel, ok, kind, created_at FROM alert_delivery ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        if row is None:
+            return None
+        return LastDelivery(row["channel"], bool(row["ok"]), row["kind"], row["created_at"])
+
+
+def alert_problem(conn: sqlite3.Connection) -> str | None:
+    """Why the owner might not be hearing from the system, or ``None`` when alerts work.
+
+    ``not configured``: the worker found no channel at its last start. ``the last alert failed on
+    every channel``: delivery tries every channel before giving up, so a failed latest attempt
+    means all of them failed. Reads only, so a read-only connection is fine."""
+    row = conn.execute(
+        "SELECT value FROM control WHERE key = ?", (ALERTS_CONFIGURED_KEY,)
+    ).fetchone()
+    configured = None if row is None else row["value"] == "1"
+    if configured is False:
+        return PROBLEM_NOT_CONFIGURED
+    last = AlertStore(conn).latest()
+    if last is None or last.ok:
+        return None
+    if last.channel == "none":
+        return None if configured else PROBLEM_NOT_CONFIGURED
+    return PROBLEM_FAILED_EVERYWHERE

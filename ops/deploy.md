@@ -103,6 +103,11 @@ SSH tunnel (alternative):
 ssh -L 8501:127.0.0.1:8501 guard-host     # then open http://localhost:8501
 ```
 
+Recommended access setup: set BOTH `GUARD_ALLOWED_USERS` and `GUARD_DASHBOARD_PASSWORD` (at least 12
+characters) in `.env`. `tailscale serve` supplies the login header, but a header is only trustworthy
+when serve is the only way in; the password covers a mistake there. Compose passes these two values
+(and nothing else from `.env`) to the dashboard container.
+
 ## 7. Backups
 
 ```bash
@@ -116,10 +121,19 @@ A backup copies `ops.sqlite` (consistent snapshot), the DuckDB warehouse, `confi
 MSCI file. Backups inside the same volume do not survive losing the host: copy them off the host
 regularly (for example `rsync` over Tailscale to your laptop, or an encrypted bucket).
 
-Schedule it from the host's cron (unverified):
+A backup takes the `run` and `writer` locks, checkpoints the warehouse (a failed checkpoint is an
+error), runs the integrity checks on the snapshot before it is named, writes folders as 0700 and files
+as 0600, and records `last_backup_at` in the control table. `prune` verifies every backup, never
+deletes the newest one that verifies, and leaves unverifiable folders in place (it warns about them).
+
+The backup holds your holdings and history in clear text. Encrypt it before it leaves the host
+(for example `age -r <recipient> -o backup.tar.age`) and keep one copy off the VM.
+
+Schedule it from the host's cron (unverified). A failed run must notify you: the last line pings a
+healthchecks-style URL on success and its `/fail` endpoint on failure, so a missing ping also alerts.
 
 ```cron
-15 2 * * * cd /srv/guard/app && docker compose exec -T worker python -m guard.storage.backup backup --dest /data/backups && docker compose exec -T worker python -m guard.storage.backup prune --dest /data/backups
+15 2 * * * cd /srv/guard/app && (docker compose exec -T worker python -m guard.storage.backup backup --dest /data/backups && docker compose exec -T worker python -m guard.storage.backup prune --dest /data/backups && curl -fsS -m 10 --retry 3 https://hc-ping.example/<uuid> >/dev/null) || curl -fsS -m 10 https://hc-ping.example/<uuid>/fail >/dev/null
 ```
 
 Retention: 14 daily, 8 weekly, 24 monthly.
@@ -140,7 +154,12 @@ host: stop the stack, then
 docker compose run --rm worker python -m guard.storage.backup restore /data/backups/backup-<stamp> --data-dir /data --force
 ```
 
-and put `.env` back from your password manager.
+Restore refuses to run while the `run`, `writer` or `migrate` lock is held, stages the backup next to
+the data directory, runs the integrity checks on that copy, then swaps it in. The old directory is kept
+as `/data.pre-restore-<stamp>` (as `/data/.pre-restore-<stamp>` when `/data` is a mount point, which
+cannot be renamed); files that are not in the backup do not survive, so that folder is your safety net.
+`--force` is required when the data directory is not empty. Delete the pre-restore folder only after
+`status` looks right. Put `.env` back from your password manager.
 
 ## 9. Updating
 

@@ -20,18 +20,21 @@ import re
 import shutil
 import sqlite3
 import sys
-from collections.abc import Callable, Hashable, Iterator, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Hashable, Iterable, Iterator, Sequence
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import duckdb
 
+from guard.storage import run_store
 from guard.storage.lock import writer_lock
+from guard.storage.ops import open_ops
 
 __all__ = ["BackupError", "backup", "folder_name", "latest", "main", "prune", "restore", "verify"]
 
 MANIFEST = "manifest.json"
+LAST_BACKUP_KEY = "last_backup_at"
 OPS_REL = "state/ops.sqlite"
 WAREHOUSE_REL = "warehouse/guard.duckdb"
 _NAME_RE = re.compile(r"^backup-(\d{8}T\d{6})Z$")
@@ -67,20 +70,33 @@ def _is_secret_name(name: str) -> bool:
 
 
 @contextmanager
-def _locked(data_dir: Path, wait_seconds: float) -> Iterator[None]:
-    """Hold the writer lock of ``data_dir`` (the lock module resolves it from the environment)."""
+def _locked(
+    data_dir: Path, wait_seconds: float, names: Sequence[str] = ("run", "writer")
+) -> Iterator[None]:
+    """Hold the named locks of ``data_dir`` (the lock module resolves it from the environment)."""
     previous = os.environ.get("GUARD_DATA_DIR")
     os.environ["GUARD_DATA_DIR"] = str(data_dir)
     try:
-        with writer_lock("writer", wait_seconds=wait_seconds) as acquired:
-            if not acquired:
-                raise BackupError("the writer lock is held by another process; try again later")
+        with ExitStack() as stack:
+            for name in names:
+                acquired = stack.enter_context(writer_lock(name, wait_seconds=wait_seconds))
+                if not acquired:
+                    raise BackupError(
+                        f"the {name} lock is held by another process; try again later"
+                    )
             yield
     finally:
         if previous is None:
             os.environ.pop("GUARD_DATA_DIR", None)
         else:
             os.environ["GUARD_DATA_DIR"] = previous
+
+
+def _make_private(root: Path) -> None:
+    """Owner-only permissions: directories 0700, files 0600."""
+    root.chmod(0o700)
+    for path in root.rglob("*"):
+        path.chmod(0o700 if path.is_dir() else 0o600)
 
 
 def _snapshot_sqlite(src: Path, dst: Path) -> None:
@@ -97,10 +113,14 @@ def _snapshot_sqlite(src: Path, dst: Path) -> None:
 
 def _copy_warehouse(src: Path, dst: Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
-    try:  # fold the write-ahead log into the file when nothing else has it open
-        duckdb.connect(str(src)).close()
-    except duckdb.Error:
-        pass
+    try:  # fold the write-ahead log into the file; a copy without it could be stale
+        conn = duckdb.connect(str(src))
+        try:
+            conn.execute("CHECKPOINT")
+        finally:
+            conn.close()
+    except duckdb.Error as e:
+        raise BackupError(f"warehouse checkpoint failed: {e}") from e
     shutil.copy2(src, dst)
     wal = src.with_name(src.name + ".wal")
     if wal.exists():
@@ -130,7 +150,7 @@ def backup(
     if final.exists():
         raise BackupError(f"backup folder exists: {final}")
     with _locked(data_dir, lock_wait_seconds):
-        dest.mkdir(parents=True, exist_ok=True)
+        dest.mkdir(mode=0o700, parents=True, exist_ok=True)
         staging = dest / (final.name + ".partial")
         if staging.exists():
             shutil.rmtree(staging)
@@ -146,6 +166,9 @@ def backup(
                 shutil.copy2(manual, staging / manual.name)
             if not staging.exists():
                 raise BackupError(f"nothing to back up in {data_dir}")
+            problems = check_data(staging)
+            if problems:
+                raise BackupError("the snapshot failed its integrity check: " + "; ".join(problems))
             files = {
                 str(p.relative_to(staging)): _sha256(p)
                 for p in sorted(staging.rglob("*"))
@@ -153,11 +176,26 @@ def backup(
             }
             manifest = {"created_at": now.astimezone(UTC).isoformat(), "files": files}
             (staging / MANIFEST).write_text(json.dumps(manifest, indent=2, sort_keys=True))
+            _make_private(staging)
             staging.rename(final)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
             raise
+        if (data_dir / OPS_REL).exists():
+            _record_last_backup(now)
     return final
+
+
+def _record_last_backup(now: datetime) -> None:
+    """Note the time of this backup in the control table (the data dir is already resolved)."""
+    try:
+        conn = open_ops()
+        try:
+            run_store.set_control(conn, LAST_BACKUP_KEY, now.astimezone(UTC).isoformat(), now)
+        finally:
+            conn.close()
+    except sqlite3.Error as e:
+        raise BackupError(f"backup written but last_backup_at could not be recorded: {e}") from e
 
 
 def _load_manifest(backup_dir: Path) -> dict[str, str]:
@@ -194,24 +232,97 @@ def verify(backup_dir: Path) -> list[str]:
     return problems
 
 
-def restore(backup_dir: Path, data_dir: Path, *, force: bool = False) -> None:
-    """Verify ``backup_dir``, then copy it into ``data_dir`` (a non-empty one needs ``force``)."""
+def _stage(backup_dir: Path, files: Iterable[str], staged: Path) -> None:
+    staged.mkdir(mode=0o700, parents=True)
+    for rel in files:
+        target = staged / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup_dir / rel, target)
+    _make_private(staged)
+
+
+def restore(
+    backup_dir: Path,
+    data_dir: Path,
+    *,
+    force: bool = False,
+    lock_wait_seconds: float = 5.0,
+    now: datetime | None = None,
+) -> None:
+    """Verify ``backup_dir``, stage and check a copy, then swap it in for ``data_dir``.
+
+    A non-empty ``data_dir`` needs ``force``; the run, writer and migrate locks must all be free.
+    The old directory is kept as ``<data_dir>.pre-restore-<stamp>`` (inside ``data_dir`` when it is
+    a mount point and cannot be renamed); files that are not in the backup do not survive.
+    """
     problems = verify(backup_dir)
     if problems:
         raise BackupError("backup failed verification: " + "; ".join(problems))
-    if data_dir.exists() and any(data_dir.iterdir()) and not force:
+    data_dir = data_dir.resolve() if data_dir.exists() else data_dir.absolute()
+    occupied = data_dir.exists() and any(data_dir.iterdir())
+    if occupied and not force:
         raise BackupError(f"data dir is not empty: {data_dir} (use force to overwrite)")
-    files = _load_manifest(backup_dir)
-    for stale in (
-        "state/ops.sqlite-wal",
-        "state/ops.sqlite-shm",
-        "warehouse/guard.duckdb.wal",
+    stamp = (now or datetime.now(UTC)).astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    in_place = occupied and os.path.ismount(data_dir)
+    holder = data_dir if in_place else data_dir.parent
+    staged = holder / (
+        f".restore-staging-{stamp}" if in_place else f"{data_dir.name}.restore-{stamp}"
+    )
+    files = list(_load_manifest(backup_dir))
+    with (
+        _locked(data_dir, lock_wait_seconds, ("run", "writer", "migrate"))
+        if occupied
+        else _nolock()
     ):
-        (data_dir / stale).unlink(missing_ok=True)
-    for rel in files:
-        target = data_dir / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(backup_dir / rel, target)
+        if staged.exists():
+            shutil.rmtree(staged)
+        try:
+            _stage(backup_dir, files, staged)
+            found = check_data(staged)
+            if found:
+                raise BackupError("restored data failed its integrity check: " + "; ".join(found))
+            _swap(data_dir, staged, stamp, occupied=occupied, in_place=in_place)
+        except BaseException:
+            shutil.rmtree(staged, ignore_errors=True)
+            raise
+
+
+@contextmanager
+def _nolock() -> Iterator[None]:
+    yield
+
+
+def _swap(data_dir: Path, staged: Path, stamp: str, *, occupied: bool, in_place: bool) -> None:
+    if in_place:
+        aside = data_dir / f".pre-restore-{stamp}"
+        aside.mkdir(mode=0o700)
+        old = [p for p in data_dir.iterdir() if p not in (staged, aside)]
+        for path in old:
+            path.rename(aside / path.name)
+        try:
+            for path in list(staged.iterdir()):
+                path.rename(data_dir / path.name)
+        except BaseException:
+            for path in old:
+                (aside / path.name).rename(path)
+            raise
+        staged.rmdir()
+        return
+    if occupied:
+        aside = data_dir.with_name(f"{data_dir.name}.pre-restore-{stamp}")
+        if aside.exists():
+            raise BackupError(f"pre-restore folder already exists: {aside}")
+        data_dir.rename(aside)
+        try:
+            staged.rename(data_dir)
+        except BaseException:
+            aside.rename(data_dir)
+            raise
+        return
+    if data_dir.exists():
+        data_dir.rmdir()
+    data_dir.parent.mkdir(parents=True, exist_ok=True)
+    staged.rename(data_dir)
 
 
 def check_data(data_dir: Path) -> list[str]:
@@ -249,11 +360,19 @@ def latest(dest: Path) -> Path | None:
 def prune(
     dest: Path, keep_daily: int = 14, keep_weekly: int = 8, keep_monthly: int = 24
 ) -> list[str]:
-    """Delete backups outside the newest-per-day, -week and -month sets; return removed names."""
+    """Delete verified backups outside the newest-per-day, -week and -month sets; return names.
+
+    Only backups that pass ``verify`` take a retention slot. The newest verified one is never
+    deleted, and a backup that does not verify is neither counted nor deleted (see ``unverified``).
+    """
     if not dest.is_dir():
         return []
     found = sorted(
-        ((when, p) for p in dest.iterdir() if p.is_dir() and (when := _parse_name(p.name))),
+        (
+            (when, p)
+            for p in dest.iterdir()
+            if p.is_dir() and (when := _parse_name(p.name)) and not verify(p)
+        ),
         key=lambda t: t[0],
         reverse=True,
     )
@@ -280,12 +399,23 @@ def prune(
         | newest_per(week, keep_weekly)
         | newest_per(month, keep_monthly)
     )
+    if found:
+        keep.add(found[0][1].name)
     removed = []
     for _, path in found:
         if path.name not in keep:
             shutil.rmtree(path)
             removed.append(path.name)
     return removed
+
+
+def unverified(dest: Path) -> list[str]:
+    """Names of backup folders in ``dest`` that fail ``verify`` (left alone by ``prune``)."""
+    if not dest.is_dir():
+        return []
+    return sorted(
+        p.name for p in dest.iterdir() if p.is_dir() and _parse_name(p.name) and verify(p)
+    )
 
 
 def _dest(arg: str | None) -> Path:
@@ -336,6 +466,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "prune":
             removed = prune(_dest(args.dest), args.keep_daily, args.keep_weekly, args.keep_monthly)
             print(f"removed {len(removed)} old backups")
+            for name in unverified(_dest(args.dest)):
+                print(f"warning: {name} does not verify and was left in place", file=sys.stderr)
         elif args.command == "verify":
             problems = verify(Path(args.source))
             if not problems and args.data_dir:

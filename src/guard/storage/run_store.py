@@ -11,7 +11,7 @@ import hashlib
 import json
 import sqlite3
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from guard.ladder import LadderState
@@ -130,6 +130,18 @@ def save_ladder_state(
     )
 
 
+def get_control(conn: sqlite3.Connection, key: str) -> str | None:
+    row = conn.execute("SELECT value FROM control WHERE key = ?", (key,)).fetchone()
+    return None if row is None else str(row["value"])
+
+
+def set_control(conn: sqlite3.Connection, key: str, value: str, now: datetime) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO control (key, value, updated_at) VALUES (?, ?, ?)",
+        (key, value, _stamp(now)),
+    )
+
+
 def get_paused(conn: sqlite3.Connection) -> bool:
     row = conn.execute("SELECT value FROM control WHERE key = ?", (PAUSED_KEY,)).fetchone()
     return row is not None and row["value"] == "1"
@@ -219,6 +231,38 @@ def last_successful_run(conn: sqlite3.Connection, kind: str) -> RunRecord | None
         "SELECT * FROM run WHERE kind = ? AND status = 'ok' ORDER BY slot DESC LIMIT 1", (kind,)
     ).fetchone()
     return None if row is None else _record(row)
+
+
+WeekState = Literal["done", "paused", "missing"]
+ACCOUNTED_FOR = ("ok", "paused")
+SCHEDULER_TICK_KEY = "scheduler_tick"
+ALERTS_CONFIGURED_KEY = "alerts_configured"
+
+
+def weekly_slot_state(conn: sqlite3.Connection, slot: str) -> WeekState:
+    """The one definition of "this week is accounted for": a weekly run of ``slot`` (or of a later
+    week, as when a run is made early) is ``ok`` (``done``) or was recorded ``paused``. Anything
+    else, including a stopped or failed run, is ``missing``. The heartbeat, the dashboard and the
+    healthcheck all call this."""
+    row = conn.execute(
+        "SELECT status FROM run WHERE kind = 'weekly' AND slot >= ? AND status IN ('ok', 'paused')"
+        " ORDER BY slot DESC, status = 'ok' DESC LIMIT 1",
+        (slot,),
+    ).fetchone()
+    if row is None:
+        return "missing"
+    return "done" if row["status"] == "ok" else "paused"
+
+
+def set_scheduler_tick(conn: sqlite3.Connection, now: datetime) -> None:
+    """Record that the scheduler process is alive (UTC ISO)."""
+    set_control(conn, SCHEDULER_TICK_KEY, now.astimezone(UTC).isoformat(), now)
+
+
+def scheduler_tick(conn: sqlite3.Connection) -> datetime | None:
+    """When the scheduler last ticked, or ``None`` if it never has."""
+    value = get_control(conn, SCHEDULER_TICK_KEY)
+    return None if value is None else datetime.fromisoformat(value)
 
 
 def record_response(

@@ -160,3 +160,16 @@ def test_status_check_fails_when_this_weeks_advice_is_overdue(data_dir: Path) ->
     code, text = later("status", "--check")
     assert code == 1
     assert "has not completed" in text
+
+
+def test_the_cli_installs_the_log_filter_so_bot_tokens_never_reach_the_logs(
+    cli: Cli, caplog: pytest.LogCaptureFixture
+) -> None:
+    import logging
+
+    cli("status")
+    with caplog.at_level(logging.WARNING):
+        logging.getLogger("apprise").error(
+            "send failed: https://api.telegram.org/bot123456:ABCdef_gh-IJK/sendMessage"
+        )
+    assert "ABCdef_gh-IJK" not in caplog.text
