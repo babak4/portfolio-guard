@@ -107,7 +107,7 @@ v1 is **advice-only**: it reads portfolio data from the Trading212 API and sends
 - **Safe asset (Decided):** default is a **money-market ETF** (e.g. CSH2; XSTR as an alternative). Other instruments (short gilts, gold, and so on) can be added as selectable alternatives. The tool shows a comparison and advice on the trade-offs of each so the owner chooses, and backtests can compare them.
 
 ### 5.6 Allocation constraints and fund suggestions
-- **US exposure cap (Decided):** flag when **look-through US exposure** (including the US share inside global ETFs) exceeds a configured limit.
+- **US exposure threshold (Decided; narrowed by the owner on 2026-11-08):** flag when the share of the **whole portfolio held in US-only funds** exceeds a configured threshold (default 50%). It is a limit, not a target. US exposure inside global funds is not counted.
 - **Fee ceiling (Decided):** flag any holding whose ongoing charge exceeds a configured limit and suggest a cheaper equivalent.
 - **Fund universe (Decided):** owned funds plus a **watchlist** the owner controls. The tool may suggest alternatives from the watchlist with reasons (initial seeds from earlier analysis: CUKX, VMID, XDEW).
 - Suggestions only count if the fund is available on Trading212.
@@ -172,7 +172,7 @@ v1 is **advice-only**: it reads portfolio data from the Trading212 API and sends
 
 **Open decisions (to settle in implementation planning)**
 1. Maximum change per week (proposed 15% of portfolio).
-2. US exposure cap value (proposed ~50% look-through).
+2. US exposure threshold (50% of the whole portfolio in US-only funds; settled).
 3. Fee ceiling value (proposed 0.15% ongoing charge).
 4. Ladder-to-signal mapping and the thresholds for each signal.
 5. Number of re-entry tranches (proposed 4).

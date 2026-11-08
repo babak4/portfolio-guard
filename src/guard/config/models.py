@@ -52,6 +52,15 @@ class Rebalance(_Strict):
     drift_band: float = Field(gt=0, lt=1)
 
 
+class Allocation(_Strict):
+    """Long-term target mix. ``growth_targets`` maps a fund symbol to its share of the growth
+    sleeve (shares sum to 1); empty means no per-fund targets are set. Trades below
+    ``min_trade_gbp`` are not advised."""
+
+    growth_targets: dict[str, float]
+    min_trade_gbp: int = Field(ge=0)
+
+
 class Constraints(_Strict):
     us_exposure_cap: float = Field(gt=0, le=1)
     fee_ceiling: float = Field(gt=0, lt=1)
@@ -95,6 +104,7 @@ class GuardConfig(_Strict):
     ladder: Ladder
     daily_check: DailyCheck
     rebalance: Rebalance
+    allocation: Allocation
     constraints: Constraints
     data: DataRules
     portfolio: Portfolio

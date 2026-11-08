@@ -35,8 +35,12 @@ daily_check:
 rebalance:
   drift_band: 0.05               # percentage points as a fraction
 
+allocation:
+  growth_targets: {}              # e.g. {VWRP: 0.6, VUAG: 0.4}; set in overrides.yaml
+  min_trade_gbp: 25
+
 constraints:
-  us_exposure_cap: 0.50          # PRD proposal; owner to confirm
+  us_exposure_cap: 0.50          # most of the whole portfolio that may sit in US-only funds (a limit, not a target)
   fee_ceiling: 0.0015            # PRD proposal; owner to confirm
 
 data:
