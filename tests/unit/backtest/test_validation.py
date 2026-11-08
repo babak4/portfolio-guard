@@ -25,7 +25,7 @@ from tests.fixtures.backtest.synthetic import world
 def trial(x, y, calmar, dd, lag):
     return TrialResult(
         {"trend_window": x, "drawdown_threshold": y},
-        {"calmar": calmar, "max_drawdown": dd, "worst_lag": lag},
+        {"calmar": calmar, "max_drawdown": dd, "median_lag": lag},
         f"{x}-{y}",
     )
 
@@ -303,7 +303,7 @@ def test_joint_plateau_score_varies_every_chosen_axis_around_the_centre():
                 ts.append(
                     TrialResult(
                         {"trend_window": a, "drawdown_threshold": b, "confirmation_runs": c},
-                        {"max_drawdown": -0.8 if bad else -0.2, "worst_lag": 0.5, "calmar": 0.5},
+                        {"max_drawdown": -0.8 if bad else -0.2, "median_lag": 0.5, "calmar": 0.5},
                         f"{a}{b}{c}",
                     )
                 )

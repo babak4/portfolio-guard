@@ -78,6 +78,7 @@ def test_every_trial_is_logged_and_the_count_equals_the_log_lines(cfg, tmp_path)
         "turnover",
         "whipsaws_per_year",
         "time_defensive",
+        "median_lag",
         "worst_lag",
     } <= set(trials[0].metrics)
 

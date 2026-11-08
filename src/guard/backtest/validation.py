@@ -36,7 +36,7 @@ class InsufficientHistory(ValueError):
 
 
 Cell = tuple[Any, Any]
-_DD, _LAG = "max_drawdown", "worst_lag"
+_DD, _LAG = "max_drawdown", "median_lag"
 _WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday")
 
 
@@ -553,6 +553,7 @@ def walk_forward(
     metrics = _basic_metrics(out_dates, out_idx)
     bench_metrics = _basic_metrics(out_dates, out_bench)
     lags = rolling_lag_fast(out_dates, out_idx, out_bench, lag_years)
+    metrics["median_lag"] = statistics.median(v for _, v in lags) if lags else None
     metrics["worst_lag"] = max((v for _, v in lags), default=None)
     metrics["cagr_lag_pct"] = ((bench_metrics["cagr"] or 0.0) - (metrics["cagr"] or 0.0)) * 100.0
     return WalkForwardResult(folds, out_dates, out_idx, out_bench, metrics, bench_metrics)

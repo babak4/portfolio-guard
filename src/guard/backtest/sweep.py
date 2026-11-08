@@ -12,6 +12,7 @@ import bisect
 import hashlib
 import itertools
 import json
+import statistics
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import date
@@ -217,7 +218,8 @@ def headline_metrics(
 ) -> dict[str, float | None]:
     """Headline metrics of ``result`` against ``benchmark`` (a buy-and-hold on the same dates).
 
-    ``worst_lag`` is the largest rolling-window lag in percent a year (positive: trailed).
+    ``median_lag`` is the typical rolling-window lag and ``worst_lag`` the largest, both in percent
+    a year (positive: trailed). The lag target is judged on ``median_lag``.
     """
     years = (result.dates[-1] - result.dates[0]).days / DAYS_PER_YEAR
     lags = rolling_lag_fast(result.dates, result.index, benchmark.index, lag_years)
@@ -229,6 +231,7 @@ def headline_metrics(
         "turnover": m.turnover(result.total_traded, result.dates, result.values),
         "whipsaws_per_year": m.whipsaw_round_trips(result.decisions) / years if years > 0 else 0.0,
         "time_defensive": m.time_defensive(result.advised_equity, step0_equity),
+        "median_lag": statistics.median(v for _, v in lags) if lags else None,
         "worst_lag": max((v for _, v in lags), default=None),
     }
 
