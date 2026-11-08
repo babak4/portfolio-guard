@@ -1,7 +1,8 @@
 """The red/amber/green status light. One rule, used by alerts and the dashboard alike.
 
 Green: nothing to do. Amber: look at it (a ladder move, a warning, trades to make, paused, or an
-unusual market day). Red: the run did not complete, the advice was blocked, or the fast path applies.
+unusual market day). Red: the run did not complete, the advice was blocked, or the fast path
+applies.
 """
 
 from __future__ import annotations
